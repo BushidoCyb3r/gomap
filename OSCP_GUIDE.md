@@ -2,7 +2,7 @@
 
 **Your comprehensive network scanner and enumeration tool for OSCP labs and exam!**
 
-## 🎯 Why GoMap for OSCP?
+## Why GoMap for OSCP?
 
 GoMap includes **50+ specialized scripts** focused on:
 - **Service enumeration** - Detailed reconnaissance of all major services
@@ -11,7 +11,7 @@ GoMap includes **50+ specialized scripts** focused on:
 - **Exploitation guidance** - Practical commands and Metasploit modules
 - **OSCP-specific protocols** - SMB, RDP, NFS, SNMP, and more
 
-## 🚀 Quick Start for OSCP
+## Quick Start for OSCP
 
 ### Initial Network Scan
 ```bash
@@ -51,7 +51,7 @@ GoMap includes **50+ specialized scripts** focused on:
 ./gomap -target 192.168.x.x -script -script-category vuln -v
 ```
 
-## 📋 Service-by-Service Enumeration
+##  Service-by-Service Enumeration
 
 ### FTP (21)
 ```bash
@@ -86,7 +86,7 @@ ftp 192.168.x.x
 hydra -L users.txt -P passwords.txt ssh://192.168.x.x
 ```
 
-### Telnet (23) ⚠️
+### Telnet (23) ⚠
 ```bash
 ./gomap -target 192.168.x.x -ports 23 -script -v
 ```
@@ -375,7 +375,7 @@ kerbrute userenum -d domain.local users.txt --dc 192.168.x.x
 GetNPUsers.py domain.local/ -dc-ip 192.168.x.x -request
 ```
 
-## 🎓 OSCP Exam Strategy
+## OSCP Exam Strategy
 
 ### Time Management
 
@@ -426,7 +426,7 @@ done
    - Check OS versions from service detection
    - Research kernel exploits after initial foothold
 
-## 🔧 Integration with Other Tools
+## Integration with Other Tools
 
 ### Metasploit
 ```bash
@@ -450,7 +450,7 @@ nmap -p 80 --script http-enum 192.168.x.x
 enum4linux -a 192.168.x.x
 ```
 
-## 💡 Pro Tips
+## Pro Tips
 
 1. **Always enumerate thoroughly** - More time in recon = less time stuck
 2. **Try anonymous/guest access first** - Often overlooked
@@ -462,16 +462,12 @@ enum4linux -a 192.168.x.x
 
 ## 🎯 OSCP Point Value Strategy
 
-**10-point machines:** Start here, usually easier web apps
-**20-point machines:** Medium difficulty, often Linux
-**25-point machines:** Domain Controllers, Active Directory
-
 Use GoMap's script engine to quickly identify:
 - Entry points (web apps, SMB, NFS)
 - Privilege escalation vectors
 - Lateral movement opportunities
 
-## 📝 Report Generation
+## Report Generation
 
 Save your scans:
 ```bash
@@ -485,13 +481,11 @@ The output includes:
 - Exploitation guidance
 - Tools and commands to use
 
-## ⚠️ Legal Notice
+## Legal Notice
 
 This tool is for use in the **OSCP labs and exam ONLY** or on systems you own/have permission to test. Unauthorized scanning is illegal.
 
-## 🏆 Good Luck!
-
-Remember: **Try Harder!** But also **Enumerate Smarter!**
+## Good Luck!
 
 ---
 *"The more you enumerate, the less you have to exploit"*
