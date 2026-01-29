@@ -25,6 +25,8 @@ func main() {
 	
 	verbose := flag.Bool("v", false, "Verbose output")
 	pingOnly := flag.Bool("ping", false, "Ping scan only (host discovery)")
+	skipDown := flag.Bool("skip-down", false, "Skip hosts that appear down (faster scanning)")
+	pingTimeout := flag.Duration("ping-timeout", 500*time.Millisecond, "Timeout for host discovery ping")
 	scriptScan := flag.Bool("script", false, "Enable script scanning")
 	scriptCategory := flag.String("script-category", "", "Run scripts from specific category (auth, vuln, discovery, etc.)")
 	listScripts := flag.Bool("script-help", false, "List all available scripts")
@@ -72,6 +74,7 @@ func main() {
 		Target:         *target,
 		Ports:          *ports,
 		Timeout:        *timeout,
+		PingTimeout:    *pingTimeout,
 		Threads:        *threads,
 		HostThreads:    *hostThreads,
 		ScanType:       *scanType,
@@ -79,6 +82,7 @@ func main() {
 		ServiceDetect:  *serviceDetect,
 		Verbose:        *verbose,
 		PingOnly:       *pingOnly,
+		SkipDown:       *skipDown,
 		ScriptScan:     *scriptScan,
 		ScriptCategory: ScriptCategory(*scriptCategory),
 		Output:         *output,

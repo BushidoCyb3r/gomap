@@ -30,8 +30,18 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 
 	// Check if host is up
 	results.HostUp = s.pingHost(targetIP)
-	if !results.HostUp && s.config.Verbose {
-		fmt.Println(ColorYellow + "[!] Warning: Host appears down, continuing scan anyway..." + ColorReset)
+	if !results.HostUp {
+		if s.config.SkipDown {
+			if s.config.Verbose {
+				fmt.Println(ColorYellow + "[!] Host appears down, skipping (use without -skip-down to scan anyway)" + ColorReset)
+			}
+			results.EndTime = time.Now()
+			results.Duration = results.EndTime.Sub(results.StartTime)
+			return results, nil
+		}
+		if s.config.Verbose {
+			fmt.Println(ColorYellow + "[!] Warning: Host appears down, continuing scan anyway..." + ColorReset)
+		}
 	}
 
 	// If ping only, return early
@@ -216,21 +226,59 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 	return results
 }
 
-// pingHost checks if the host is up using ICMP or TCP fallback
+// pingHost checks if the host is up using parallel TCP connection attempts
 func (s *Scanner) pingHost(target string) bool {
-	// Try TCP connection to common ports as a ping alternative
-	commonPorts := []int{80, 443, 22, 21, 25}
+	// Try TCP connection to common ports in parallel for faster detection
+	commonPorts := []int{80, 443, 22, 21, 25, 8080, 3389}
 
-	for _, port := range commonPorts {
-		address := fmt.Sprintf("%s:%d", target, port)
-		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
-		if err == nil {
-			conn.Close()
-			return true
-		}
+	// Use configurable ping timeout, default to 500ms if not set
+	timeout := s.config.PingTimeout
+	if timeout == 0 {
+		timeout = 500 * time.Millisecond
 	}
 
-	return false
+	// Channel to signal host is up (first successful connection wins)
+	found := make(chan bool, 1)
+	done := make(chan struct{})
+
+	var wg sync.WaitGroup
+	var closeOnce sync.Once
+
+	for _, port := range commonPorts {
+		wg.Add(1)
+		go func(p int) {
+			defer wg.Done()
+
+			select {
+			case <-done:
+				// Another goroutine already found the host is up
+				return
+			default:
+			}
+
+			address := fmt.Sprintf("%s:%d", target, p)
+			conn, err := net.DialTimeout("tcp", address, timeout)
+			if err == nil {
+				conn.Close()
+				select {
+				case found <- true:
+					closeOnce.Do(func() { close(done) }) // Signal other goroutines to stop
+				default:
+				}
+			}
+		}(port)
+	}
+
+	// Wait for all goroutines in a separate goroutine
+	go func() {
+		wg.Wait()
+		select {
+		case found <- false:
+		default:
+		}
+	}()
+
+	return <-found
 }
 
 // ScanNetwork performs a scan across all hosts in a CIDR range
@@ -279,12 +327,14 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 				Target:         targetHost,
 				Ports:          s.config.Ports,
 				Timeout:        s.config.Timeout,
+				PingTimeout:    s.config.PingTimeout,
 				Threads:        s.config.Threads,
 				ScanType:       s.config.ScanType,
 				OSDetect:       s.config.OSDetect,
 				ServiceDetect:  s.config.ServiceDetect,
 				Verbose:        false, // Suppress per-host verbose output for network scans
 				PingOnly:       s.config.PingOnly,
+				SkipDown:       s.config.SkipDown,
 				ScriptScan:     s.config.ScriptScan,
 				ScriptCategory: s.config.ScriptCategory,
 			}

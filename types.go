@@ -9,6 +9,7 @@ type ScanConfig struct {
 	Target         string
 	Ports          string
 	Timeout        time.Duration
+	PingTimeout    time.Duration
 	Threads        int
 	HostThreads    int
 	ScanType       string
@@ -16,6 +17,7 @@ type ScanConfig struct {
 	ServiceDetect  bool
 	Verbose        bool
 	PingOnly       bool
+	SkipDown       bool
 	ScriptScan     bool
 	ScriptCategory ScriptCategory
 	Output         string
