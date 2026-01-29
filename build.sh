@@ -1,6 +1,6 @@
 #!/bin/bash
 
-echo "=== Building GoMap with Explicit File List ==="
+echo "=== Building GoMap ==="
 echo ""
 
 # Clean
