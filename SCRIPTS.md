@@ -77,7 +77,7 @@ The script engine allows you to run specialized scripts against discovered servi
 
 **Total Scripts: 52** covering all major services and OSCP scenarios!
 
-## 🎓 OSCP-Specific Scripts
+## OSCP-Specific Scripts
 
 Many scripts are designed specifically for OSCP enumeration and exploitation:
 
@@ -98,8 +98,6 @@ Many scripts are designed specifically for OSCP enumeration and exploitation:
 - NFS exports (nfs-showmount)
 - Rsync modules (rsync-list-modules)
 - DistCC RCE (distcc-cve2004-2687)
-
-**See [OSCP_GUIDE.md](OSCP_GUIDE.md) for complete OSCP enumeration workflows!**
 
 ## Usage
 
@@ -150,10 +148,16 @@ Full featured scan:
 ## Example Output
 
 ```
-╔═══════════════════════════════════════╗
-║         GoMap - Network Scanner       ║
-║    Nmap-like tool written in Go       ║
-╚═══════════════════════════════════════╝
+
+   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██████╗ 
+  ██╔════╝ ██╔═══██╗████╗ ████║██╔══██╗██╔══██╗
+  ██║  ███╗██║   ██║██╔████╔██║███████║██████╔╝
+  ██║   ██║██║   ██║██║╚██╔╝██║██╔══██║██╔═══╝ 
+  ╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║     
+   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     
+
+          Network Scanner & Exploitation Tool
+          ═══════════════════════════════════════
 
 Resolved example.com to 93.184.216.34
 Scanning 1024 ports with 100 threads...
