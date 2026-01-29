@@ -1,0 +1,188 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"time"
+)
+
+func main() {
+	// Command line flags
+	target := flag.String("target", "", "Target IP or hostname to scan")
+	ports := flag.String("ports", "1-1024", "Port range to scan (e.g., 80,443 or 1-1000)")
+	timeout := flag.Duration("timeout", 1*time.Second, "Timeout for each port")
+	threads := flag.Int("threads", 100, "Number of concurrent threads")
+	scanType := flag.String("type", "tcp", "Scan type: tcp, syn, udp")
+	osDetect := flag.Bool("os", false, "Enable OS detection")
+	serviceDetect := flag.Bool("service", false, "Enable service version detection")
+	verbose := flag.Bool("v", false, "Verbose output")
+	pingOnly := flag.Bool("ping", false, "Ping scan only (host discovery)")
+	scriptScan := flag.Bool("script", false, "Enable script scanning (NSE-like)")
+	scriptCategory := flag.String("script-category", "", "Run scripts from specific category (auth, vuln, discovery, etc.)")
+	listScripts := flag.Bool("script-help", false, "List all available scripts")
+
+	flag.Parse()
+
+	// Print banner
+	printBanner()
+
+	// List scripts if requested
+	if *listScripts {
+		engine := NewScriptEngine(true, "", false)
+		engine.ListScripts()
+		os.Exit(0)
+	}
+
+	// Validate target
+	if *target == "" {
+		fmt.Println(ColorRed + "Error: target is required" + ColorReset)
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	// Create scanner configuration
+	config := &ScanConfig{
+		Target:         *target,
+		Ports:          *ports,
+		Timeout:        *timeout,
+		Threads:        *threads,
+		ScanType:       *scanType,
+		OSDetect:       *osDetect,
+		ServiceDetect:  *serviceDetect,
+		Verbose:        *verbose,
+		PingOnly:       *pingOnly,
+		ScriptScan:     *scriptScan,
+		ScriptCategory: ScriptCategory(*scriptCategory),
+	}
+
+	// Run the scan
+	scanner := NewScanner(config)
+	results, err := scanner.Scan()
+	if err != nil {
+		fmt.Printf(ColorRed+"Error during scan: %v\n"+ColorReset, err)
+		os.Exit(1)
+	}
+
+	// Print results
+	printResults(results, config)
+}
+
+func printBanner() {
+	banner := ColorPurple + ColorBold + `
+   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██████╗ 
+  ██╔════╝ ██╔═══██╗████╗ ████║██╔══██╗██╔══██╗
+  ██║  ███╗██║   ██║██╔████╔██║███████║██████╔╝
+  ██║   ██║██║   ██║██║╚██╔╝██║██╔══██║██╔═══╝ 
+  ╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║     
+   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     
+` + ColorReset + ColorTeal + `
+          Network Scanner & Exploitation Tool
+` + ColorCyan + `           
+` + ColorReset + ColorPurple + `          ═══════════════════════════════════════
+` + ColorReset
+	fmt.Println(banner)
+}
+
+func printResults(results *ScanResults, config *ScanConfig) {
+	fmt.Printf("\n"+ColorCyan+ColorBold+"╔════════════════════════════════════════════════╗\n")
+	fmt.Printf("║           SCAN RESULTS                         ║\n")
+	fmt.Printf("╚════════════════════════════════════════════════╝\n"+ColorReset)
+	
+	fmt.Printf(ColorTeal+"Target:   "+ColorReset+ColorBold+"%s\n"+ColorReset, results.Target)
+	fmt.Printf(ColorTeal+"Started:  "+ColorReset+"%s\n", results.StartTime.Format("15:04:05"))
+	fmt.Printf(ColorTeal+"Finished: "+ColorReset+"%s\n", results.EndTime.Format("15:04:05"))
+	fmt.Printf(ColorTeal+"Duration: "+ColorReset+ColorPurple+"%v\n"+ColorReset, results.Duration)
+
+	if !results.HostUp {
+		fmt.Println(ColorRed + "\n⚠ Host appears to be DOWN" + ColorReset)
+		return
+	}
+
+	fmt.Println(ColorGreen + "\n✓ Host is UP" + ColorReset)
+	
+	if config.PingOnly {
+		return
+	}
+
+	if len(results.OpenPorts) == 0 {
+		fmt.Println(ColorYellow + "\n⚠ No open ports found" + ColorReset)
+		return
+	}
+
+	fmt.Printf("\n"+ColorCyan+ColorBold+"Found %d open port(s):\n\n"+ColorReset, len(results.OpenPorts))
+	fmt.Printf(ColorPurple+"%-8s %-10s %s\n"+ColorReset, "PORT", "STATE", "SERVICE")
+	fmt.Printf(ColorPurple+"%-8s %-10s %s\n"+ColorReset, "────", "─────", "───────")
+	
+	for _, port := range results.OpenPorts {
+		service := port.Service
+		if service == "" {
+			service = "unknown"
+		}
+		
+		// Color code by port type
+		portColor := ColorCyan
+		if port.Port == 21 || port.Port == 23 || port.Port == 69 {
+			portColor = ColorRed // Insecure services
+		} else if port.Port == 80 || port.Port == 443 || port.Port == 8080 {
+			portColor = ColorGreen // HTTP services
+		} else if port.Port == 139 || port.Port == 445 {
+			portColor = ColorYellow // SMB services
+		}
+		
+		fmt.Printf(portColor+"%-8d "+ColorReset+ColorGreen+"%-10s "+ColorReset+ColorTeal+"%s\n"+ColorReset, 
+			port.Port, port.State, service)
+		
+		if config.ServiceDetect && port.Version != "" {
+			fmt.Printf(ColorPurple+"         ↳ "+ColorReset+"Version: %s\n", port.Version)
+		}
+	}
+
+	if config.OSDetect && results.OS != "" {
+		fmt.Printf("\n"+ColorCyan+ColorBold+"OS Detection:\n"+ColorReset)
+		fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"%s\n", results.OS)
+	}
+
+	// Print script results
+	if len(results.ScriptResults) > 0 {
+		fmt.Printf("\n"+ColorCyan+ColorBold+"╔════════════════════════════════════════════════╗\n")
+		fmt.Printf("║           SCRIPT RESULTS                       ║\n")
+		fmt.Printf("╚════════════════════════════════════════════════╝\n"+ColorReset)
+		
+		for _, scriptResult := range results.ScriptResults {
+			fmt.Printf("\n"+ColorPurple+ColorBold+"[%s]\n"+ColorReset, scriptResult.ScriptName)
+			if scriptResult.Error != nil {
+				fmt.Printf(ColorRed+"  ✗ Error: %v\n"+ColorReset, scriptResult.Error)
+			} else {
+				// Add indentation to output
+				lines := splitLines(scriptResult.Output)
+				for _, line := range lines {
+					fmt.Printf(ColorTeal+"  "+ColorReset+"%s\n", line)
+				}
+				if scriptResult.Vulnerable {
+					fmt.Printf(ColorRed+ColorBold+"  ⚠️  VULNERABLE\n"+ColorReset)
+				}
+			}
+		}
+	}
+	
+	fmt.Printf("\n"+ColorCyan+ColorBold+"════════════════════════════════════════════════\n"+ColorReset)
+	fmt.Printf(ColorGreen+"Scan complete! "+ColorReset)
+}
+
+func splitLines(s string) []string {
+	result := []string{}
+	current := ""
+	for _, ch := range s {
+		if ch == '\n' {
+			result = append(result, current)
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
+}
