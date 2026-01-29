@@ -34,6 +34,7 @@ go build -o gomap \
     scripts_webapp.go \
     service_detection.go \
     scanner.go \
+    output.go \
     main.go
 
 if [ $? -ne 0 ]; then

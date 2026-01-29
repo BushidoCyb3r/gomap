@@ -10,6 +10,7 @@ type ScanConfig struct {
 	Ports          string
 	Timeout        time.Duration
 	Threads        int
+	HostThreads    int
 	ScanType       string
 	OSDetect       bool
 	ServiceDetect  bool
@@ -17,26 +18,42 @@ type ScanConfig struct {
 	PingOnly       bool
 	ScriptScan     bool
 	ScriptCategory ScriptCategory
+	Output         string
+	OutputFormat   string
 }
 
 // ScanResults holds the results of a scan
 type ScanResults struct {
-	Target        string
-	HostUp        bool
-	OpenPorts     []PortResult
-	OS            string
-	ScriptResults []ScriptResult
-	StartTime     time.Time
-	EndTime       time.Time
-	Duration      time.Duration
+	Target        string         `json:"target" xml:"target"`
+	HostUp        bool           `json:"host_up" xml:"host_up"`
+	OpenPorts     []PortResult   `json:"open_ports" xml:"open_ports>port"`
+	OS            string         `json:"os,omitempty" xml:"os,omitempty"`
+	ScriptResults []ScriptResult `json:"script_results,omitempty" xml:"script_results>script,omitempty"`
+	StartTime     time.Time      `json:"start_time" xml:"start_time"`
+	EndTime       time.Time      `json:"end_time" xml:"end_time"`
+	Duration      time.Duration  `json:"duration_ns" xml:"duration_ns"`
+	DurationStr   string         `json:"duration" xml:"duration"`
 }
 
 // PortResult represents a scanned port
 type PortResult struct {
-	Port    int
-	State   string
-	Service string
-	Version string
+	Port    int    `json:"port" xml:"number,attr"`
+	State   string `json:"state" xml:"state,attr"`
+	Service string `json:"service" xml:"service,attr"`
+	Version string `json:"version,omitempty" xml:"version,attr,omitempty"`
+}
+
+// NetworkScanResults holds results for multiple hosts in a subnet scan
+type NetworkScanResults struct {
+	Network     string         `json:"network" xml:"network"`
+	TotalHosts  int            `json:"total_hosts" xml:"total_hosts"`
+	HostsUp     int            `json:"hosts_up" xml:"hosts_up"`
+	HostsDown   int            `json:"hosts_down" xml:"hosts_down"`
+	HostResults []*ScanResults `json:"host_results" xml:"host_results>host"`
+	StartTime   time.Time      `json:"start_time" xml:"start_time"`
+	EndTime     time.Time      `json:"end_time" xml:"end_time"`
+	Duration    time.Duration  `json:"duration_ns" xml:"duration_ns"`
+	DurationStr string         `json:"duration" xml:"duration"`
 }
 
 // Scanner performs network scans

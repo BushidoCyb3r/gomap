@@ -45,11 +45,12 @@ type ScriptTarget struct {
 
 // ScriptResult contains script execution results
 type ScriptResult struct {
-	ScriptName string
-	Output     string
-	Findings   []string
-	Vulnerable bool
-	Error      error
+	ScriptName string   `json:"script_name" xml:"name,attr"`
+	Output     string   `json:"output" xml:"output"`
+	Findings   []string `json:"findings,omitempty" xml:"findings>finding,omitempty"`
+	Vulnerable bool     `json:"vulnerable" xml:"vulnerable,attr"`
+	Error      error    `json:"-" xml:"-"`
+	ErrorStr   string   `json:"error,omitempty" xml:"error,omitempty"`
 }
 
 // ScriptEngine manages and executes scripts

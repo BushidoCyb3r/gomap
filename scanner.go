@@ -220,7 +220,7 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 func (s *Scanner) pingHost(target string) bool {
 	// Try TCP connection to common ports as a ping alternative
 	commonPorts := []int{80, 443, 22, 21, 25}
-	
+
 	for _, port := range commonPorts {
 		address := fmt.Sprintf("%s:%d", target, port)
 		conn, err := net.DialTimeout("tcp", address, 2*time.Second)
@@ -229,6 +229,101 @@ func (s *Scanner) pingHost(target string) bool {
 			return true
 		}
 	}
-	
+
 	return false
+}
+
+// ScanNetwork performs a scan across all hosts in a CIDR range
+func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
+	results := &NetworkScanResults{
+		Network:   cidr,
+		StartTime: time.Now(),
+	}
+
+	// Expand CIDR to list of IPs
+	hosts, err := expandCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to expand CIDR: %v", err)
+	}
+
+	results.TotalHosts = len(hosts)
+
+	fmt.Printf(ColorCyan+"[*] "+ColorReset+"Scanning network "+ColorPurple+"%s"+ColorReset+" (%d hosts)\n\n", cidr, len(hosts))
+
+	// Use semaphore to limit concurrent host scans
+	hostThreads := s.config.HostThreads
+	if hostThreads <= 0 {
+		hostThreads = 10
+	}
+	sem := make(chan struct{}, hostThreads)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Create progress bar
+	progressBar := NewProgressBar(len(hosts))
+
+	// Track scanned count
+	scannedCount := 0
+
+	for _, host := range hosts {
+		wg.Add(1)
+		go func(targetHost string) {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Create a new scanner config for this host
+			hostConfig := &ScanConfig{
+				Target:         targetHost,
+				Ports:          s.config.Ports,
+				Timeout:        s.config.Timeout,
+				Threads:        s.config.Threads,
+				ScanType:       s.config.ScanType,
+				OSDetect:       s.config.OSDetect,
+				ServiceDetect:  s.config.ServiceDetect,
+				Verbose:        false, // Suppress per-host verbose output for network scans
+				PingOnly:       s.config.PingOnly,
+				ScriptScan:     s.config.ScriptScan,
+				ScriptCategory: s.config.ScriptCategory,
+			}
+
+			hostScanner := NewScanner(hostConfig)
+			hostResults, err := hostScanner.Scan()
+
+			mu.Lock()
+			scannedCount++
+			progressBar.Update(scannedCount)
+
+			if err != nil {
+				if s.config.Verbose {
+					fmt.Printf("\n"+ColorRed+"[!] "+ColorReset+"Error scanning %s: %v\n", targetHost, err)
+				}
+				mu.Unlock()
+				return
+			}
+
+			// Set duration string
+			hostResults.DurationStr = hostResults.Duration.String()
+
+			if hostResults.HostUp {
+				results.HostsUp++
+				results.HostResults = append(results.HostResults, hostResults)
+			} else {
+				results.HostsDown++
+			}
+			mu.Unlock()
+		}(host)
+	}
+
+	// Wait for all goroutines to complete
+	wg.Wait()
+	progressBar.Finish(false)
+
+	results.EndTime = time.Now()
+	results.Duration = results.EndTime.Sub(results.StartTime)
+	results.DurationStr = results.Duration.String()
+
+	return results, nil
 }

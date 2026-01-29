@@ -1,10 +1,83 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+// ProgressBar represents a terminal progress bar
+type ProgressBar struct {
+	total     int
+	current   int
+	width     int
+	mu        sync.Mutex
+	cancelled bool
+}
+
+// NewProgressBar creates a new progress bar
+func NewProgressBar(total int) *ProgressBar {
+	return &ProgressBar{
+		total: total,
+		width: 40,
+	}
+}
+
+// Update updates the progress bar with the current count
+func (p *ProgressBar) Update(current int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.current = current
+	p.render()
+}
+
+// Increment increments the progress bar by 1
+func (p *ProgressBar) Increment() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.current++
+	p.render()
+}
+
+// SetCancelled marks the progress bar as cancelled
+func (p *ProgressBar) SetCancelled() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cancelled = true
+}
+
+// render draws the progress bar
+func (p *ProgressBar) render() {
+	percent := float64(p.current) / float64(p.total)
+	filled := int(percent * float64(p.width))
+	if filled > p.width {
+		filled = p.width
+	}
+
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", p.width-filled)
+
+	status := ""
+	if p.cancelled {
+		status = ColorYellow + " [STOPPING]" + ColorReset
+	}
+
+	fmt.Printf("\r"+ColorCyan+"[*] "+ColorReset+"Progress: "+ColorPurple+"%s"+ColorReset+" %d/%d (%.1f%%)%s    ",
+		bar, p.current, p.total, percent*100, status)
+}
+
+// Finish completes the progress bar
+func (p *ProgressBar) Finish(cancelled bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if cancelled {
+		fmt.Printf("\r"+ColorYellow+"[!] "+ColorReset+"Scan terminated early: "+ColorPurple+"%d/%d"+ColorReset+" hosts scanned                    \n", p.current, p.total)
+	} else {
+		fmt.Printf("\r"+ColorGreen+"[+] "+ColorReset+"Scan complete: "+ColorPurple+"%d/%d"+ColorReset+" hosts scanned                         \n", p.current, p.total)
+	}
+}
 
 // ANSI color codes - defined once for the entire project
 const (
@@ -215,4 +288,79 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// isCIDR checks if the target string is in CIDR notation (e.g., 192.168.1.0/24)
+func isCIDR(target string) bool {
+	_, _, err := net.ParseCIDR(target)
+	return err == nil
+}
+
+// expandCIDR expands a CIDR notation to a list of all host IP addresses
+func expandCIDR(cidr string) ([]string, error) {
+	ip, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid CIDR notation: %v", err)
+	}
+
+	var ips []string
+
+	// Get the network size
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	totalHosts := 1 << hostBits
+
+	// For IPv4, skip network address and broadcast for /31 and larger networks
+	// /32 is a single host, /31 is point-to-point link (both hosts usable)
+	skipFirst := false
+	skipLast := false
+	if bits == 32 && hostBits >= 2 {
+		skipFirst = true // Skip network address
+		skipLast = true  // Skip broadcast address
+	}
+
+	// Convert IP to uint32 for easy iteration (IPv4 only)
+	ip = ip.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("only IPv4 CIDR notation is supported")
+	}
+
+	startIP := binary.BigEndian.Uint32(ip)
+
+	// Ensure we start at the network address
+	mask := binary.BigEndian.Uint32(ipnet.Mask)
+	startIP = startIP & mask
+
+	for i := 0; i < totalHosts; i++ {
+		if skipFirst && i == 0 {
+			continue
+		}
+		if skipLast && i == totalHosts-1 {
+			continue
+		}
+
+		currentIP := make(net.IP, 4)
+		binary.BigEndian.PutUint32(currentIP, startIP+uint32(i))
+		ips = append(ips, currentIP.String())
+	}
+
+	return ips, nil
+}
+
+// getCIDRHostCount returns the number of usable hosts in a CIDR range
+func getCIDRHostCount(cidr string) (int, error) {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return 0, err
+	}
+
+	ones, bits := ipnet.Mask.Size()
+	hostBits := bits - ones
+	totalHosts := 1 << hostBits
+
+	// Subtract network and broadcast addresses for /30 and larger
+	if hostBits >= 2 {
+		return totalHosts - 2, nil
+	}
+	return totalHosts, nil
 }

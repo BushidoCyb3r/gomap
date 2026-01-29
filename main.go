@@ -29,6 +29,17 @@ func main() {
 	scriptCategory := flag.String("script-category", "", "Run scripts from specific category (auth, vuln, discovery, etc.)")
 	listScripts := flag.Bool("script-help", false, "List all available scripts")
 
+	// Output options
+	output := flag.String("output", "", "Output file path")
+	flag.StringVar(output, "o", "", "Output file path (shorthand)")
+
+	outputFormat := flag.String("output-format", "txt", "Output format: json, xml, txt")
+	flag.StringVar(outputFormat, "oF", "txt", "Output format (shorthand)")
+
+	// Network scanning options
+	hostThreads := flag.Int("host-threads", 10, "Concurrent hosts to scan for subnet scans")
+	flag.IntVar(hostThreads, "hT", 10, "Concurrent hosts to scan (shorthand)")
+
 	flag.Parse()
 
 	// Print banner
@@ -62,6 +73,7 @@ func main() {
 		Ports:          *ports,
 		Timeout:        *timeout,
 		Threads:        *threads,
+		HostThreads:    *hostThreads,
 		ScanType:       *scanType,
 		OSDetect:       *osDetect,
 		ServiceDetect:  *serviceDetect,
@@ -69,18 +81,53 @@ func main() {
 		PingOnly:       *pingOnly,
 		ScriptScan:     *scriptScan,
 		ScriptCategory: ScriptCategory(*scriptCategory),
+		Output:         *output,
+		OutputFormat:   *outputFormat,
 	}
 
-	// Run the scan
+	// Create scanner
 	scanner := NewScanner(config)
-	results, err := scanner.Scan()
-	if err != nil {
-		fmt.Printf(ColorRed+"Error during scan: %v\n"+ColorReset, err)
-		os.Exit(1)
-	}
 
-	// Print results
-	printResults(results, config)
+	// Check if target is CIDR notation for network scanning
+	if isCIDR(*target) {
+		// Network scan
+		networkResults, err := scanner.ScanNetwork(*target)
+		if err != nil {
+			fmt.Printf(ColorRed+"Error during network scan: %v\n"+ColorReset, err)
+			os.Exit(1)
+		}
+
+		// Print results
+		printNetworkResults(networkResults, config)
+
+		// Write to file if output specified
+		if *output != "" {
+			if err := writeOutput(networkResults, *output, *outputFormat); err != nil {
+				fmt.Printf(ColorRed+"Error writing output: %v\n"+ColorReset, err)
+				os.Exit(1)
+			}
+			fmt.Printf(ColorGreen+"[+] "+ColorReset+"Results written to "+ColorPurple+"%s"+ColorReset+" (%s)\n", *output, *outputFormat)
+		}
+	} else {
+		// Single host scan
+		results, err := scanner.Scan()
+		if err != nil {
+			fmt.Printf(ColorRed+"Error during scan: %v\n"+ColorReset, err)
+			os.Exit(1)
+		}
+
+		// Print results
+		printResults(results, config)
+
+		// Write to file if output specified
+		if *output != "" {
+			if err := writeOutput(results, *output, *outputFormat); err != nil {
+				fmt.Printf(ColorRed+"Error writing output: %v\n"+ColorReset, err)
+				os.Exit(1)
+			}
+			fmt.Printf(ColorGreen+"[+] "+ColorReset+"Results written to "+ColorPurple+"%s"+ColorReset+" (%s)\n", *output, *outputFormat)
+		}
+	}
 }
 
 func printBanner() {
@@ -182,6 +229,82 @@ func printResults(results *ScanResults, config *ScanConfig) {
 	
 	fmt.Printf("\n"+ColorCyan+ColorBold+"════════════════════════════════════════════════\n"+ColorReset)
 	fmt.Printf(ColorGreen+"Scan complete!"+ColorReset+"\n")
+}
+
+func printNetworkResults(results *NetworkScanResults, config *ScanConfig) {
+	fmt.Printf("\n"+ColorCyan+ColorBold+"╔════════════════════════════════════════════════╗\n")
+	fmt.Printf("║         NETWORK SCAN RESULTS                   ║\n")
+	fmt.Printf("╚════════════════════════════════════════════════╝\n"+ColorReset)
+
+	fmt.Printf(ColorTeal+"Network:    "+ColorReset+ColorBold+"%s\n"+ColorReset, results.Network)
+	fmt.Printf(ColorTeal+"Total Hosts:"+ColorReset+" %d\n", results.TotalHosts)
+	fmt.Printf(ColorTeal+"Hosts Up:   "+ColorReset+ColorGreen+"%d\n"+ColorReset, results.HostsUp)
+	fmt.Printf(ColorTeal+"Hosts Down: "+ColorReset+ColorRed+"%d\n"+ColorReset, results.HostsDown)
+	fmt.Printf(ColorTeal+"Started:    "+ColorReset+"%s\n", results.StartTime.Format("15:04:05"))
+	fmt.Printf(ColorTeal+"Finished:   "+ColorReset+"%s\n", results.EndTime.Format("15:04:05"))
+	fmt.Printf(ColorTeal+"Duration:   "+ColorReset+ColorPurple+"%v\n"+ColorReset, results.Duration)
+
+	if len(results.HostResults) == 0 {
+		fmt.Println(ColorYellow + "\n[!] No hosts responded" + ColorReset)
+		return
+	}
+
+	// Print summary of all hosts with open ports
+	fmt.Printf("\n"+ColorCyan+ColorBold+"╔════════════════════════════════════════════════╗\n")
+	fmt.Printf("║         DISCOVERED HOSTS                       ║\n")
+	fmt.Printf("╚════════════════════════════════════════════════╝\n"+ColorReset)
+
+	for _, host := range results.HostResults {
+		if !host.HostUp {
+			continue
+		}
+
+		fmt.Printf("\n"+ColorPurple+ColorBold+"┌─ %s\n"+ColorReset, host.Target)
+
+		if config.PingOnly {
+			fmt.Printf(ColorGreen+"│  Host is UP\n"+ColorReset)
+			continue
+		}
+
+		if len(host.OpenPorts) == 0 {
+			fmt.Printf(ColorYellow+"│  No open ports found\n"+ColorReset)
+			continue
+		}
+
+		fmt.Printf(ColorCyan+"│  Open ports: %d\n"+ColorReset, len(host.OpenPorts))
+		fmt.Printf(ColorPurple+"│  %-8s %-10s %s\n"+ColorReset, "PORT", "STATE", "SERVICE")
+
+		for _, port := range host.OpenPorts {
+			service := port.Service
+			if service == "" {
+				service = "unknown"
+			}
+
+			// Color code by port type
+			portColor := ColorCyan
+			if port.Port == 21 || port.Port == 23 || port.Port == 69 {
+				portColor = ColorRed
+			} else if port.Port == 80 || port.Port == 443 || port.Port == 8080 {
+				portColor = ColorGreen
+			} else if port.Port == 139 || port.Port == 445 {
+				portColor = ColorYellow
+			}
+
+			fmt.Printf("│  "+portColor+"%-8d "+ColorReset+ColorGreen+"%-10s "+ColorReset+ColorTeal+"%s"+ColorReset, port.Port, port.State, service)
+
+			if config.ServiceDetect && port.Version != "" {
+				fmt.Printf(" (%s)", port.Version)
+			}
+			fmt.Println()
+		}
+
+		if config.OSDetect && host.OS != "" {
+			fmt.Printf(ColorCyan+"│  OS: "+ColorReset+"%s\n", host.OS)
+		}
+	}
+
+	fmt.Printf("\n"+ColorCyan+ColorBold+"════════════════════════════════════════════════\n"+ColorReset)
+	fmt.Printf(ColorGreen+"Network scan complete!"+ColorReset+"\n")
 }
 
 func splitLines(s string) []string {
