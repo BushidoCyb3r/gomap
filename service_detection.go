@@ -14,6 +14,9 @@ func (s *Scanner) detectServices(target string, ports *[]PortResult) {
 		fmt.Println("\n" + ColorCyan + "[*] " + ColorReset + "Performing service detection...")
 	}
 
+	// Create progress bar for service detection
+	progressBar := NewProgressBarWithLabel(len(*ports), "services")
+
 	for i := range *ports {
 		port := &(*ports)[i]
 		address := fmt.Sprintf("%s:%d", target, port.Port)
@@ -23,12 +26,16 @@ func (s *Scanner) detectServices(target string, ports *[]PortResult) {
 		if banner != "" {
 			version := parseVersion(banner, port.Service)
 			port.Version = version
-			
+
 			if s.config.Verbose {
-				fmt.Printf(ColorGreen+"  [+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+": "+ColorTeal+"%s\n"+ColorReset, port.Port, version)
+				fmt.Printf("\n"+ColorGreen+"  [+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+": "+ColorTeal+"%s"+ColorReset, port.Port, version)
 			}
 		}
+
+		// Update progress
+		progressBar.Update(i + 1)
 	}
+	progressBar.Finish(false)
 }
 
 // grabBanner connects to a port and attempts to read a banner

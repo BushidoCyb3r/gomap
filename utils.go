@@ -16,6 +16,7 @@ type ProgressBar struct {
 	width     int
 	mu        sync.Mutex
 	cancelled bool
+	label     string
 }
 
 // NewProgressBar creates a new progress bar
@@ -23,6 +24,16 @@ func NewProgressBar(total int) *ProgressBar {
 	return &ProgressBar{
 		total: total,
 		width: 40,
+		label: "hosts",
+	}
+}
+
+// NewProgressBarWithLabel creates a new progress bar with a custom label
+func NewProgressBarWithLabel(total int, label string) *ProgressBar {
+	return &ProgressBar{
+		total: total,
+		width: 40,
+		label: label,
 	}
 }
 
@@ -73,9 +84,9 @@ func (p *ProgressBar) Finish(cancelled bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if cancelled {
-		fmt.Printf("\r"+ColorYellow+"[!] "+ColorReset+"Scan terminated early: "+ColorPurple+"%d/%d"+ColorReset+" hosts scanned                    \n", p.current, p.total)
+		fmt.Printf("\r"+ColorYellow+"[!] "+ColorReset+"Scan terminated early: "+ColorPurple+"%d/%d"+ColorReset+" %s scanned                    \n", p.current, p.total, p.label)
 	} else {
-		fmt.Printf("\r"+ColorGreen+"[+] "+ColorReset+"Scan complete: "+ColorPurple+"%d/%d"+ColorReset+" hosts scanned                         \n", p.current, p.total)
+		fmt.Printf("\r"+ColorGreen+"[+] "+ColorReset+"Scan complete: "+ColorPurple+"%d/%d"+ColorReset+" %s scanned                         \n", p.current, p.total, p.label)
 	}
 }
 

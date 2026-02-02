@@ -148,28 +148,36 @@ func (se *ScriptEngine) RunScripts(target ScriptTarget) []ScriptResult {
 	if !se.enabled {
 		return nil
 	}
-	
+
 	var results []ScriptResult
 	var mu sync.Mutex
 	var wg sync.WaitGroup
-	
+
 	// Find applicable scripts
 	applicableScripts := se.getApplicableScripts(target)
-	
-	if se.verbose && len(applicableScripts) > 0 {
+
+	if len(applicableScripts) == 0 {
+		return nil
+	}
+
+	if se.verbose {
 		fmt.Printf("\n"+ColorCyan+"[*] "+ColorReset+"Running "+ColorPurple+"%d"+ColorReset+" scripts against "+ColorTeal+"%s:%d"+ColorReset+"...\n", len(applicableScripts), target.Host, target.Port)
 	}
-	
+
+	// Create progress bar for script execution
+	progressBar := NewProgressBarWithLabel(len(applicableScripts), "scripts")
+	completedCount := 0
+
 	// Execute scripts concurrently
 	for _, script := range applicableScripts {
 		wg.Add(1)
 		go func(s Script) {
 			defer wg.Done()
-			
+
 			if se.verbose {
-				fmt.Printf(ColorTeal+"  [→] "+ColorReset+"Running script: "+ColorPurple+"%s\n"+ColorReset, s.Name())
+				fmt.Printf("\n"+ColorTeal+"  [→] "+ColorReset+"Running script: "+ColorPurple+"%s"+ColorReset, s.Name())
 			}
-			
+
 			result, err := s.Execute(target)
 			if err != nil {
 				result = &ScriptResult{
@@ -177,14 +185,17 @@ func (se *ScriptEngine) RunScripts(target ScriptTarget) []ScriptResult {
 					Error:      err,
 				}
 			}
-			
+
 			mu.Lock()
 			results = append(results, *result)
+			completedCount++
+			progressBar.Update(completedCount)
 			mu.Unlock()
 		}(script)
 	}
-	
+
 	wg.Wait()
+	progressBar.Finish(false)
 	return results
 }
 

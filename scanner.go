@@ -128,6 +128,10 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 	}
 	sem := make(chan struct{}, maxThreads)
 
+	// Create progress bar for port scanning
+	progressBar := NewProgressBarWithLabel(len(ports), "ports")
+	scannedCount := 0
+
 	for _, port := range ports {
 		wg.Add(1)
 		go func(p int) {
@@ -136,13 +140,13 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 			defer func() { <-sem }() // Release
 
 			address := fmt.Sprintf("%s:%d", target, p)
-			
+
 			// Use custom dialer to disable keepalive and close faster
 			dialer := &net.Dialer{
 				Timeout:   s.config.Timeout,
 				KeepAlive: -1, // Disable keepalive
 			}
-			
+
 			conn, err := dialer.Dial("tcp", address)
 
 			if err == nil {
@@ -152,9 +156,9 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 					tcpConn.SetLinger(0) // RST instead of FIN for faster close
 				}
 				conn.Close()
-				
+
 				service := getServiceName(p)
-				
+
 				mu.Lock()
 				results = append(results, PortResult{
 					Port:    p,
@@ -164,13 +168,20 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 				mu.Unlock()
 
 				if s.config.Verbose {
-					fmt.Printf(ColorGreen+"[+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+" is "+ColorGreen+"open"+ColorReset+" (%s)\n", p, service)
+					fmt.Printf("\n"+ColorGreen+"[+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+" is "+ColorGreen+"open"+ColorReset+" (%s)", p, service)
 				}
 			}
+
+			// Update progress
+			mu.Lock()
+			scannedCount++
+			progressBar.Update(scannedCount)
+			mu.Unlock()
 		}(port)
 	}
 
 	wg.Wait()
+	progressBar.Finish(false)
 	return results
 }
 
@@ -181,6 +192,10 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 	var wg sync.WaitGroup
 
 	sem := make(chan struct{}, s.config.Threads)
+
+	// Create progress bar for UDP port scanning
+	progressBar := NewProgressBarWithLabel(len(ports), "ports")
+	scannedCount := 0
 
 	for _, port := range ports {
 		wg.Add(1)
@@ -195,10 +210,10 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 			if err == nil {
 				// Send a probe packet
 				conn.Write([]byte("probe"))
-				
+
 				// Set read deadline
 				conn.SetReadDeadline(time.Now().Add(s.config.Timeout))
-				
+
 				buffer := make([]byte, 1024)
 				_, err := conn.Read(buffer)
 				conn.Close()
@@ -215,14 +230,21 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 					mu.Unlock()
 
 					if s.config.Verbose {
-						fmt.Printf(ColorYellow+"[+] "+ColorReset+"UDP Port "+ColorPurple+"%d"+ColorReset+" is "+ColorYellow+"open|filtered"+ColorReset+" (%s)\n", p, service)
+						fmt.Printf("\n"+ColorYellow+"[+] "+ColorReset+"UDP Port "+ColorPurple+"%d"+ColorReset+" is "+ColorYellow+"open|filtered"+ColorReset+" (%s)", p, service)
 					}
 				}
 			}
+
+			// Update progress
+			mu.Lock()
+			scannedCount++
+			progressBar.Update(scannedCount)
+			mu.Unlock()
 		}(port)
 	}
 
 	wg.Wait()
+	progressBar.Finish(false)
 	return results
 }
 
