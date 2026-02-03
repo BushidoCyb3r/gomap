@@ -235,14 +235,23 @@ func printResults(results *ScanResults, config *ScanConfig) {
 					edbDisplay = "N/A"
 				}
 
-				fmt.Printf(severityColor+"         ⚠ %s | EDB-ID:%s (%s) - %s\n"+ColorReset,
-					cveDisplay, edbDisplay, vuln.Severity, vuln.Title)
+				// Show [!] for unverified (needs manual check) vs [✓] for version-confirmed
+			verifiedMark := ""
+			if !vuln.Verified {
+				verifiedMark = " [needs verification]"
+			}
+			fmt.Printf(severityColor+"         ⚠ %s | EDB-ID:%s (%s) - %s%s\n"+ColorReset,
+					cveDisplay, edbDisplay, vuln.Severity, vuln.Title, verifiedMark)
 
 				if vuln.Metasploit != "" {
 					fmt.Printf(ColorRed+"           → Metasploit: %s\n"+ColorReset, vuln.Metasploit)
 				}
 				if vuln.ExploitPath != "" && vuln.ExploitPath != "embedded" {
 					fmt.Printf(ColorRed+"           → Exploit: %s\n"+ColorReset, vuln.ExploitPath)
+				}
+				// Show verification hint for unverified vulnerabilities
+				if !vuln.Verified && vuln.Description != "" {
+					fmt.Printf(ColorYellow+"           → %s\n"+ColorReset, vuln.Description)
 				}
 			}
 		}
@@ -255,7 +264,10 @@ func printResults(results *ScanResults, config *ScanConfig) {
 		// Show detailed fingerprint info if available
 		if results.OSDetection != nil && results.OSDetection.Fingerprint != nil {
 			fp := results.OSDetection.Fingerprint
-			fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"Fingerprint: %s\n", fp.String())
+			fpStr := fp.String()
+			if fpStr != "" {
+				fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"Fingerprint: %s\n", fpStr)
+			}
 			if results.OSDetection.RawSocketUsed {
 				fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"Method: TCP/IP Stack Analysis\n")
 			}
@@ -377,7 +389,14 @@ func printNetworkResults(results *NetworkScanResults, config *ScanConfig) {
 					if cve == "" {
 						cve = "N/A"
 					}
-					fmt.Printf("│  "+ColorRed+"  ⚠ %s | EDB-ID:%s - %s\n"+ColorReset, cve, vuln.EDBID, vuln.Title)
+					verifiedMark := ""
+					if !vuln.Verified {
+						verifiedMark = " [needs verification]"
+					}
+					fmt.Printf("│  "+ColorRed+"  ⚠ %s | EDB-ID:%s - %s%s\n"+ColorReset, cve, vuln.EDBID, vuln.Title, verifiedMark)
+					if !vuln.Verified && vuln.Description != "" {
+						fmt.Printf("│  "+ColorYellow+"    → %s\n"+ColorReset, vuln.Description)
+					}
 				}
 			}
 		}

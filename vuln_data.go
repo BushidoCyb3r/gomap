@@ -121,9 +121,9 @@ var ServiceVulnDB = map[string][]ServiceVulnEntry{
 			Platform: "windows",
 			Type:     "remote",
 			Vulns: []VulnerabilityInfo{
-				{CVE: "CVE-2017-0144", EDBID: "41891", Title: "EternalBlue - SMB Remote Code Execution (MS17-010)", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/windows/smb/ms17_010_eternalblue", Verified: true},
-				{CVE: "CVE-2017-0145", EDBID: "41987", Title: "EternalRomance - SMB Remote Code Execution (MS17-010)", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/windows/smb/ms17_010_psexec", Verified: true},
-				{CVE: "CVE-2020-0796", EDBID: "48153", Title: "SMBGhost - SMBv3 Remote Code Execution", Severity: "critical", CVSS: 10.0, Metasploit: "exploit/windows/smb/smbghost_cve_2020_0796", Verified: true},
+				{CVE: "CVE-2017-0144", EDBID: "41891", Title: "EternalBlue - SMB Remote Code Execution (MS17-010)", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/windows/smb/ms17_010_eternalblue", Description: "Verify: nmap --script smb-vuln-ms17-010 -p445 <target>", Verified: false},
+				{CVE: "CVE-2017-0145", EDBID: "41987", Title: "EternalRomance - SMB Remote Code Execution (MS17-010)", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/windows/smb/ms17_010_psexec", Description: "Verify: nmap --script smb-vuln-ms17-010 -p445 <target>", Verified: false},
+				{CVE: "CVE-2020-0796", EDBID: "48153", Title: "SMBGhost - SMBv3 Remote Code Execution", Severity: "critical", CVSS: 10.0, Metasploit: "exploit/windows/smb/smbghost_cve_2020_0796", Description: "Verify: nmap --script smb-vuln-cve-2020-0796 -p445 <target>", Verified: false},
 			},
 		},
 	},
@@ -286,7 +286,7 @@ var ServiceVulnDB = map[string][]ServiceVulnEntry{
 			Platform: "linux",
 			Type:     "remote",
 			Vulns: []VulnerabilityInfo{
-				{CVE: "CVE-2014-6271", EDBID: "34765", Title: "Shellshock - Bash Remote Code Execution", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/multi/http/apache_mod_cgi_bash_env_exec", Verified: true},
+				{CVE: "CVE-2014-6271", EDBID: "34765", Title: "Shellshock - Bash Remote Code Execution", Severity: "critical", CVSS: 9.8, Metasploit: "exploit/multi/http/apache_mod_cgi_bash_env_exec", Description: "Verify: nmap --script http-shellshock --script-args uri=/cgi-bin/bin -p80 <target>", Verified: false},
 			},
 		},
 	},
@@ -296,7 +296,7 @@ var ServiceVulnDB = map[string][]ServiceVulnEntry{
 			Platform: "multiple",
 			Type:     "remote",
 			Vulns: []VulnerabilityInfo{
-				{CVE: "CVE-2014-0160", EDBID: "32745", Title: "Heartbleed - OpenSSL Information Disclosure", Severity: "high", CVSS: 7.5, Metasploit: "auxiliary/scanner/ssl/openssl_heartbleed", Verified: true},
+				{CVE: "CVE-2014-0160", EDBID: "32745", Title: "Heartbleed - OpenSSL Information Disclosure", Severity: "high", CVSS: 7.5, Metasploit: "auxiliary/scanner/ssl/openssl_heartbleed", Description: "Verify: nmap --script ssl-heartbleed -p443 <target>", Verified: false},
 			},
 		},
 	},
@@ -317,7 +317,7 @@ var ServiceVulnDB = map[string][]ServiceVulnEntry{
 			Platform: "multiple",
 			Type:     "remote",
 			Vulns: []VulnerabilityInfo{
-				{CVE: "CVE-2006-2369", EDBID: "1838", Title: "RealVNC 4.1.1 - Authentication Bypass", Severity: "critical", CVSS: 9.8, Metasploit: "auxiliary/scanner/vnc/vnc_none_auth"},
+				{CVE: "CVE-2006-2369", EDBID: "1838", Title: "RealVNC 4.1.1 - Authentication Bypass", Severity: "critical", CVSS: 9.8, Metasploit: "auxiliary/scanner/vnc/vnc_none_auth", Description: "Verify: nmap --script vnc-info,vnc-auth-bypass -p5900 <target>", Verified: false},
 			},
 		},
 	},
@@ -339,7 +339,7 @@ func checkBuiltInVulnDB(service, version string) []VulnerabilityInfo {
 	vulns := make([]VulnerabilityInfo, 0)
 
 	serviceLower := strings.ToLower(service)
-	versionClean := extractVersionNumber(version)
+	versionClean := extractVersionForService(version, service)
 
 	// Direct lookup
 	if entries, exists := ServiceVulnDB[serviceLower]; exists {
