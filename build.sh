@@ -1,43 +1,74 @@
 #!/bin/bash
 
-echo "=== Building GoMap ==="
+echo "════════════════════════════════════════════════"
+echo "  GoMap Build Script"
+echo "════════════════════════════════════════════════"
 echo ""
 
-# Clean
+# Clean previous build
 rm -f gomap
 
-# Build with explicit file list to ensure proper compilation order
-go build -o gomap \
-    types.go \
-    utils.go \
-    script_engine.go \
-    scripts_http.go \
-    scripts_services.go \
-    scripts_database.go \
-    scripts_smb.go \
-    scripts_windows.go \
-    scripts_enumeration.go \
-    scripts_webapp.go \
-    service_detection.go \
-    scanner.go \
-    main.go
+# Check for Go
+if ! command -v go &> /dev/null; then
+    echo "✗ Go is not installed!"
+    echo "  Install with: sudo apt install golang-go"
+    exit 1
+fi
+
+echo "[*] Go version: $(go version | cut -d' ' -f3)"
+echo ""
+
+# Build with all source files
+echo "[*] Building GoMap..."
+go build -ldflags="-s -w" -o gomap .
 
 if [ $? -eq 0 ]; then
     echo ""
-    echo "✓✓✓ BUILD SUCCESSFUL! ✓✓✓"
+    echo "════════════════════════════════════════════════"
+    echo "  ✓ BUILD SUCCESSFUL!"
+    echo "════════════════════════════════════════════════"
     echo ""
     ls -lh gomap
     echo ""
-    echo "Testing..."
-    ./gomap -script-help | head -20
+
+    # Show capabilities
+    echo "[*] Features:"
+    echo "    - TCP/UDP port scanning"
+    echo "    - Service version detection (-sV)"
+    echo "    - OS fingerprinting (-os)"
+    echo "    - Vulnerability checking (-vuln)"
+    echo "    - 50+ enumeration scripts (-script)"
+    echo "    - Exploit database (-searchsploit-update)"
     echo ""
-    echo "🎉 Ready to scan! Try: ./gomap -target 192.168.1.1 -script"
+
+    # Quick test
+    echo "[*] Quick test:"
+    ./gomap -h 2>&1 | grep -E "^\s+-(os|vuln|searchsploit)" | head -5
+    echo ""
+
+    echo "════════════════════════════════════════════════"
+    echo "  Usage Examples:"
+    echo "════════════════════════════════════════════════"
+    echo ""
+    echo "  # Basic scan"
+    echo "  ./gomap -t 192.168.1.1 -p 1-1000"
+    echo ""
+    echo "  # Full scan with OS detection and vuln check"
+    echo "  sudo ./gomap -t 192.168.1.1 -p 1-1000 -sV -os -vuln"
+    echo ""
+    echo "  # Update exploit database"
+    echo "  ./gomap -searchsploit-update"
+    echo ""
+    echo "  # Network scan"
+    echo "  ./gomap -t 192.168.1.0/24 -p 22,80,443 -sV -vuln"
+    echo ""
 else
     echo ""
-    echo "✗ Build failed"
-    echo "Trying alternative method..."
+    echo "════════════════════════════════════════════════"
+    echo "  ✗ BUILD FAILED"
+    echo "════════════════════════════════════════════════"
     echo ""
-    
-    # Alternative: use go build with all files explicitly
-    go build -v -o gomap *.go
+    echo "Trying verbose build..."
+    go build -v -o gomap . 2>&1
+    exit 1
 fi

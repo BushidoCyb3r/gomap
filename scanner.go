@@ -82,9 +82,20 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 		s.detectServices(targetIP, &results.OpenPorts)
 	}
 
-	// OS detection if enabled
+	// Vulnerability checking if enabled (requires service detection)
+	if s.config.VulnCheck && len(results.OpenPorts) > 0 {
+		s.checkVulnerabilities(&results.OpenPorts)
+		results.VulnSummary = ComputeVulnSummary(results.OpenPorts)
+	}
+
+	// OS detection if enabled (now with TCP/IP fingerprinting)
 	if s.config.OSDetect {
-		results.OS = s.detectOS(targetIP, openPorts)
+		results.OSDetection = s.performOSDetection(targetIP, results.OpenPorts)
+		if results.OSDetection != nil && results.OSDetection.BestMatch != nil {
+			results.OS = results.OSDetection.BestMatch.String()
+		} else {
+			results.OS = s.detectOS(targetIP, results.OpenPorts)
+		}
 	}
 
 	// Run scripts if enabled
@@ -354,6 +365,7 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 				ScanType:       s.config.ScanType,
 				OSDetect:       s.config.OSDetect,
 				ServiceDetect:  s.config.ServiceDetect,
+				VulnCheck:      s.config.VulnCheck,
 				Verbose:        false, // Suppress per-host verbose output for network scans
 				PingOnly:       s.config.PingOnly,
 				SkipDown:       s.config.SkipDown,
@@ -398,4 +410,145 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 	results.DurationStr = results.Duration.String()
 
 	return results, nil
+}
+
+// checkVulnerabilities checks open ports against the vulnerability database
+func (s *Scanner) checkVulnerabilities(ports *[]PortResult) {
+	if s.config.Verbose {
+		fmt.Println("\n" + ColorCyan + "[*] " + ColorReset + "Checking for known vulnerabilities...")
+	}
+
+	for i := range *ports {
+		port := &(*ports)[i]
+
+		// Get service and version
+		service := port.Service
+		version := port.Version
+
+		// Check for vulnerabilities
+		vulns := CheckServiceVulnerabilities(service, version, port.Port)
+
+		if len(vulns) > 0 {
+			port.Vulnerable = true
+			port.Vulnerabilities = vulns
+
+			if s.config.Verbose {
+				fmt.Printf(ColorRed+"  [!] "+ColorReset+"Port %d (%s): %d potential vulnerabilities\n",
+					port.Port, service, len(vulns))
+			}
+		}
+	}
+}
+
+// performOSDetection performs advanced OS detection using multiple methods
+func (s *Scanner) performOSDetection(target string, openPorts []PortResult) *OSDetectionResult {
+	if s.config.Verbose {
+		fmt.Println("\n" + ColorCyan + "[*] " + ColorReset + "Performing advanced OS detection...")
+	}
+
+	result := NewOSDetectionResult()
+
+	// Try TCP/IP stack fingerprinting first (requires root)
+	if len(openPorts) > 0 {
+		// Pick a port for fingerprinting (prefer 80, 443, 22)
+		fpPort := openPorts[0].Port
+		for _, p := range openPorts {
+			if p.Port == 80 || p.Port == 443 || p.Port == 22 {
+				fpPort = p.Port
+				break
+			}
+		}
+
+		fp, rawSocketUsed, err := FingerprintWithFallback(target, fpPort, s.config.Timeout)
+		if err == nil && fp != nil {
+			result.Fingerprint = fp
+			result.RawSocketUsed = rawSocketUsed
+
+			if rawSocketUsed {
+				result.Methods = append(result.Methods, "tcp")
+				// Match against known signatures
+				matches := MatchFingerprint(fp)
+				for _, m := range matches {
+					result.AddMatch(m)
+				}
+
+				if s.config.Verbose {
+					fmt.Printf(ColorGreen+"  [+] "+ColorReset+"TCP fingerprint: %s\n", fp.String())
+				}
+			}
+		} else if s.config.Verbose && err != nil {
+			fmt.Printf(ColorYellow+"  [!] "+ColorReset+"TCP fingerprinting: %v\n", err)
+		}
+	}
+
+	// Try ICMP fingerprinting (requires root)
+	icmpFP, err := ICMPProbe(target, s.config.Timeout)
+	if err == nil && icmpFP != nil {
+		result.ICMPUsed = true
+		result.Methods = append(result.Methods, "icmp")
+
+		icmpMatches := GetICMPOSHints(icmpFP)
+		for _, m := range icmpMatches {
+			result.AddMatch(m)
+		}
+
+		if s.config.Verbose {
+			fmt.Printf(ColorGreen+"  [+] "+ColorReset+"ICMP TTL: %d, IP ID pattern: %s\n",
+				icmpFP.TTL, icmpFP.IPIDPattern)
+		}
+	}
+
+	// Try protocol-specific fingerprinting
+	protoSuggestions := GetPortsForProtocolFingerprinting(openPorts)
+
+	// SSH fingerprinting
+	if sshPort, ok := protoSuggestions["ssh"]; ok {
+		pfp, err := SSHFingerprinting(target, sshPort, s.config.Timeout)
+		if err == nil && pfp != nil {
+			result.Methods = append(result.Methods, "ssh")
+			for _, match := range ConvertProtocolFingerprintToOSMatch(pfp) {
+				result.AddMatch(match)
+			}
+			if s.config.Verbose && len(pfp.OSHints) > 0 {
+				fmt.Printf(ColorGreen+"  [+] "+ColorReset+"SSH hints: %s\n", pfp.OSHints[0])
+			}
+		}
+	}
+
+	// HTTP fingerprinting
+	if httpPort, ok := protoSuggestions["http"]; ok {
+		pfp, err := HTTPFingerprinting(target, httpPort, s.config.Timeout)
+		if err == nil && pfp != nil {
+			result.Methods = append(result.Methods, "http")
+			for _, match := range ConvertProtocolFingerprintToOSMatch(pfp) {
+				result.AddMatch(match)
+			}
+		}
+	}
+
+	// SMB fingerprinting
+	if smbPort, ok := protoSuggestions["smb"]; ok {
+		pfp, err := SMBEnhancedFingerprint(target, smbPort, s.config.Timeout)
+		if err == nil && pfp != nil {
+			result.Methods = append(result.Methods, "smb")
+			for _, match := range ConvertProtocolFingerprintToOSMatch(pfp) {
+				result.AddMatch(match)
+			}
+		}
+	}
+
+	// Fall back to banner-based detection if no matches yet
+	if len(result.Matches) == 0 {
+		result.Methods = append(result.Methods, "banner")
+		for _, port := range openPorts {
+			if match := MatchServiceVersion(port.Version); match != nil {
+				result.AddMatch(*match)
+			}
+		}
+	}
+
+	// Select best match
+	result.SelectBestMatch()
+
+	return result
 }

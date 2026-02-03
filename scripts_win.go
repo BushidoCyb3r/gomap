@@ -250,13 +250,13 @@ func (s *MSQLServerInfoScript) Execute(target ScriptTarget) (*ScriptResult, erro
 	return result, nil
 }
 
-// SNMPEnumScript enumerates SNMP community strings
+// SNMPEnumScript enumerates SNMP service and retrieves sysDescr for OS detection
 type SNMPEnumScript struct{}
 
-func (s *SNMPEnumScript) Name() string        { return "snmp-info" }
-func (s *SNMPEnumScript) Description() string { return "SNMP service enumeration" }
+func (s *SNMPEnumScript) Name() string        { return "snmp-sysdescr" }
+func (s *SNMPEnumScript) Description() string { return "SNMP sysDescr enumeration for OS detection" }
 func (s *SNMPEnumScript) Categories() []ScriptCategory {
-	return []ScriptCategory{CategoryDiscovery, CategoryDefault, CategorySafe}
+	return []ScriptCategory{CategoryVersion, CategoryDiscovery, CategoryDefault, CategorySafe}
 }
 func (s *SNMPEnumScript) PortRule(port int, service string) bool {
 	return port == 161 || port == 162 || strings.Contains(service, "snmp")
@@ -264,8 +264,186 @@ func (s *SNMPEnumScript) PortRule(port int, service string) bool {
 
 func (s *SNMPEnumScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	result.Output = "SNMP Service detected\nCommon community strings: public, private, manager\nNote: Use snmpwalk or onesixtyone for enumeration\nExample: snmpwalk -v 2c -c public <target>"
-	result.Findings = append(result.Findings, "SNMP accessible")
+
+	// Try common community strings
+	communities := []string{"public", "private", "community"}
+
+	for _, community := range communities {
+		sysDescr, err := snmpGetSysDescr(target.Host, community)
+		if err == nil && sysDescr != "" {
+			result.Output = fmt.Sprintf("SNMP sysDescr (community: %s):\n%s\n\n", community, sysDescr)
+			result.Findings = append(result.Findings, "SNMP community '"+community+"' accessible")
+			result.Findings = append(result.Findings, "sysDescr: "+sysDescr)
+
+			// OS detection from sysDescr
+			sysDescrLower := strings.ToLower(sysDescr)
+			osHint := ""
+			switch {
+			case strings.Contains(sysDescrLower, "linux"):
+				osHint = "Linux"
+				if strings.Contains(sysDescrLower, "ubuntu") {
+					osHint = "Ubuntu Linux"
+				} else if strings.Contains(sysDescrLower, "debian") {
+					osHint = "Debian Linux"
+				} else if strings.Contains(sysDescrLower, "centos") {
+					osHint = "CentOS Linux"
+				} else if strings.Contains(sysDescrLower, "red hat") || strings.Contains(sysDescrLower, "rhel") {
+					osHint = "RHEL"
+				}
+			case strings.Contains(sysDescrLower, "windows"):
+				osHint = "Windows"
+				if strings.Contains(sysDescrLower, "server 2022") {
+					osHint = "Windows Server 2022"
+				} else if strings.Contains(sysDescrLower, "server 2019") {
+					osHint = "Windows Server 2019"
+				} else if strings.Contains(sysDescrLower, "server 2016") {
+					osHint = "Windows Server 2016"
+				}
+			case strings.Contains(sysDescrLower, "cisco"):
+				osHint = "Cisco IOS"
+			case strings.Contains(sysDescrLower, "juniper") || strings.Contains(sysDescrLower, "junos"):
+				osHint = "Juniper JunOS"
+			case strings.Contains(sysDescrLower, "freebsd"):
+				osHint = "FreeBSD"
+			case strings.Contains(sysDescrLower, "hp-ux"):
+				osHint = "HP-UX"
+			case strings.Contains(sysDescrLower, "aix"):
+				osHint = "AIX"
+			case strings.Contains(sysDescrLower, "solaris") || strings.Contains(sysDescrLower, "sunos"):
+				osHint = "Solaris"
+			case strings.Contains(sysDescrLower, "vmware"):
+				osHint = "VMware ESXi"
+			}
+
+			if osHint != "" {
+				result.Output += fmt.Sprintf("OS Detection: %s\n", osHint)
+				result.Findings = append(result.Findings, "OS detected: "+osHint)
+			}
+
+			result.Output += "\nFurther enumeration:\n"
+			result.Output += "  snmpwalk -v 2c -c " + community + " " + target.Host + " system\n"
+			result.Output += "  snmpwalk -v 2c -c " + community + " " + target.Host + " interfaces\n"
+			return result, nil
+		}
+	}
+
+	// No community string worked
+	result.Output = "SNMP Service detected\nNo common community strings worked (public, private, community)\n\n"
+	result.Output += "Brute force communities:\n"
+	result.Output += "  onesixtyone -c /usr/share/seclists/Discovery/SNMP/common-snmp-community-strings.txt " + target.Host + "\n"
+	result.Output += "  hydra -P /usr/share/seclists/Discovery/SNMP/snmp.txt " + target.Host + " snmp\n"
+	result.Findings = append(result.Findings, "SNMP accessible (community unknown)")
 
 	return result, nil
+}
+
+// snmpGetSysDescr queries SNMP sysDescr OID (1.3.6.1.2.1.1.1.0)
+func snmpGetSysDescr(host, community string) (string, error) {
+	addr := fmt.Sprintf("%s:161", host)
+	conn, err := net.DialTimeout("udp", addr, 3*time.Second)
+	if err != nil {
+		return "", err
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+	// Build SNMP v2c GET request for sysDescr (1.3.6.1.2.1.1.1.0)
+	request := buildSNMPGetRequest(community, []byte{0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00})
+
+	_, err = conn.Write(request)
+	if err != nil {
+		return "", err
+	}
+
+	response := make([]byte, 2048)
+	n, err := conn.Read(response)
+	if err != nil {
+		return "", err
+	}
+
+	return parseSNMPResponse(response[:n])
+}
+
+// buildSNMPGetRequest creates an SNMP v2c GET request
+func buildSNMPGetRequest(community string, oid []byte) []byte {
+	// This is a simplified SNMP GET request builder
+	// OID: 1.3.6.1.2.1.1.1.0 = sysDescr
+
+	// VarBind: OID + NULL value
+	varBind := []byte{0x30} // SEQUENCE
+	oidEncoded := append([]byte{0x06, byte(len(oid))}, oid...)
+	nullValue := []byte{0x05, 0x00} // NULL
+	varBindContent := append(oidEncoded, nullValue...)
+	varBind = append(varBind, byte(len(varBindContent)))
+	varBind = append(varBind, varBindContent...)
+
+	// VarBindList: SEQUENCE of VarBind
+	varBindList := []byte{0x30}
+	varBindList = append(varBindList, byte(len(varBind)))
+	varBindList = append(varBindList, varBind...)
+
+	// PDU: GetRequest-PDU (0xA0)
+	pdu := []byte{0xA0}
+	requestID := []byte{0x02, 0x04, 0x00, 0x00, 0x00, 0x01} // INTEGER request-id
+	errorStatus := []byte{0x02, 0x01, 0x00}                  // INTEGER 0
+	errorIndex := []byte{0x02, 0x01, 0x00}                   // INTEGER 0
+	pduContent := append(requestID, errorStatus...)
+	pduContent = append(pduContent, errorIndex...)
+	pduContent = append(pduContent, varBindList...)
+	pdu = append(pdu, byte(len(pduContent)))
+	pdu = append(pdu, pduContent...)
+
+	// Community string
+	communityEncoded := []byte{0x04, byte(len(community))}
+	communityEncoded = append(communityEncoded, []byte(community)...)
+
+	// Version: SNMPv2c (1)
+	version := []byte{0x02, 0x01, 0x01}
+
+	// Message
+	messageContent := append(version, communityEncoded...)
+	messageContent = append(messageContent, pdu...)
+
+	message := []byte{0x30}
+	message = append(message, byte(len(messageContent)))
+	message = append(message, messageContent...)
+
+	return message
+}
+
+// parseSNMPResponse extracts the string value from SNMP response
+func parseSNMPResponse(data []byte) (string, error) {
+	if len(data) < 20 {
+		return "", fmt.Errorf("response too short")
+	}
+
+	// Very basic ASN.1 BER parsing to find the OCTET STRING value
+	// Look for the response value after the OID
+
+	// Find OCTET STRING (0x04) after the OID
+	for i := 0; i < len(data)-2; i++ {
+		// Look for our OID followed by OCTET STRING
+		if data[i] == 0x04 && i > 10 { // OCTET STRING tag
+			length := int(data[i+1])
+			if length > 127 {
+				// Long form length encoding
+				numBytes := length & 0x7F
+				if numBytes == 1 && i+2 < len(data) {
+					length = int(data[i+2])
+					i++
+				} else if numBytes == 2 && i+3 < len(data) {
+					length = int(data[i+2])<<8 | int(data[i+3])
+					i += 2
+				} else {
+					continue
+				}
+			}
+			if i+2+length <= len(data) {
+				return string(data[i+2 : i+2+length]), nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("no string value found")
 }

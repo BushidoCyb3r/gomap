@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strings"
@@ -27,7 +28,7 @@ func (s *NFSExportScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	return result, nil
 }
 
-// DNSVersionScript attempts to get DNS version
+// DNSVersionScript attempts to get DNS version using CHAOS TXT query
 type DNSVersionScript struct{}
 
 func (s *DNSVersionScript) Name() string        { return "dns-version" }
@@ -41,10 +42,186 @@ func (s *DNSVersionScript) PortRule(port int, service string) bool {
 
 func (s *DNSVersionScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	result.Output = "DNS Service detected\nNote: Query version with: dig @<target> version.bind CHAOS TXT\nZone transfer: dig @<target> domain.com AXFR"
-	result.Findings = append(result.Findings, "DNS server accessible")
+
+	// Build DNS CHAOS TXT query for version.bind
+	query := buildDNSVersionQuery()
+
+	// Send UDP query
+	addr := fmt.Sprintf("%s:53", target.Host)
+	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	if err != nil {
+		result.Output = "DNS Service detected (could not query version)\nNote: Query manually with: dig @" + target.Host + " version.bind CHAOS TXT"
+		result.Findings = append(result.Findings, "DNS server accessible")
+		return result, nil
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = conn.Write(query)
+	if err != nil {
+		result.Output = "DNS Service detected (query failed)\nNote: Query manually with: dig @" + target.Host + " version.bind CHAOS TXT"
+		result.Findings = append(result.Findings, "DNS server accessible")
+		return result, nil
+	}
+
+	// Read response
+	response := make([]byte, 512)
+	n, err := conn.Read(response)
+	if err != nil || n < 12 {
+		result.Output = "DNS Service detected (no version response)\nNote: Server may block version queries"
+		result.Findings = append(result.Findings, "DNS server accessible (version hidden)")
+		return result, nil
+	}
+
+	// Parse DNS response
+	version := parseDNSVersionResponse(response[:n])
+	if version != "" {
+		result.Output = fmt.Sprintf("DNS Version: %s\n\nOS Detection Hints:\n", version)
+
+		// OS detection from version string
+		versionLower := strings.ToLower(version)
+		if strings.Contains(versionLower, "bind") {
+			result.Output += "  - BIND DNS server (typically Linux/Unix)\n"
+			result.Findings = append(result.Findings, "BIND DNS: "+version)
+
+			// Extract BIND version for vulnerability checking
+			if strings.Contains(version, "9.") {
+				result.Findings = append(result.Findings, "BIND 9.x detected")
+			}
+		} else if strings.Contains(versionLower, "microsoft") || strings.Contains(versionLower, "windows") {
+			result.Output += "  - Microsoft DNS server (Windows Server)\n"
+			result.Findings = append(result.Findings, "Microsoft DNS detected")
+		} else if strings.Contains(versionLower, "dnsmasq") {
+			result.Output += "  - dnsmasq (Linux/embedded)\n"
+			result.Findings = append(result.Findings, "dnsmasq DNS: "+version)
+		} else if strings.Contains(versionLower, "unbound") {
+			result.Output += "  - Unbound DNS (Linux/BSD)\n"
+			result.Findings = append(result.Findings, "Unbound DNS: "+version)
+		} else if strings.Contains(versionLower, "powerdns") {
+			result.Output += "  - PowerDNS (Linux)\n"
+			result.Findings = append(result.Findings, "PowerDNS: "+version)
+		} else {
+			result.Findings = append(result.Findings, "DNS version: "+version)
+		}
+	} else {
+		result.Output = "DNS Service detected\nVersion query returned no data"
+		result.Findings = append(result.Findings, "DNS server accessible")
+	}
 
 	return result, nil
+}
+
+// buildDNSVersionQuery creates a DNS CHAOS TXT query for version.bind
+func buildDNSVersionQuery() []byte {
+	// DNS Header (12 bytes)
+	query := make([]byte, 0, 64)
+
+	// Transaction ID
+	query = append(query, 0x00, 0x01)
+	// Flags: Standard query, recursion desired
+	query = append(query, 0x00, 0x00)
+	// Questions: 1
+	query = append(query, 0x00, 0x01)
+	// Answer RRs: 0
+	query = append(query, 0x00, 0x00)
+	// Authority RRs: 0
+	query = append(query, 0x00, 0x00)
+	// Additional RRs: 0
+	query = append(query, 0x00, 0x00)
+
+	// Question section: version.bind
+	// version (7 bytes)
+	query = append(query, 0x07)
+	query = append(query, "version"...)
+	// bind (4 bytes)
+	query = append(query, 0x04)
+	query = append(query, "bind"...)
+	// null terminator
+	query = append(query, 0x00)
+
+	// Type: TXT (16)
+	query = append(query, 0x00, 0x10)
+	// Class: CHAOS (3)
+	query = append(query, 0x00, 0x03)
+
+	return query
+}
+
+// parseDNSVersionResponse extracts version string from DNS response
+func parseDNSVersionResponse(data []byte) string {
+	if len(data) < 12 {
+		return ""
+	}
+
+	// Check response flags
+	flags := binary.BigEndian.Uint16(data[2:4])
+	if flags&0x8000 == 0 { // Not a response
+		return ""
+	}
+	if flags&0x000F != 0 { // Error code
+		return ""
+	}
+
+	// Get answer count
+	answerCount := binary.BigEndian.Uint16(data[6:8])
+	if answerCount == 0 {
+		return ""
+	}
+
+	// Skip header (12 bytes) and question section
+	offset := 12
+	// Skip question name
+	for offset < len(data) && data[offset] != 0 {
+		if data[offset]&0xC0 == 0xC0 { // Pointer
+			offset += 2
+			break
+		}
+		offset += int(data[offset]) + 1
+	}
+	if data[offset] == 0 {
+		offset++ // Skip null terminator
+	}
+	offset += 4 // Skip QTYPE and QCLASS
+
+	// Parse answer
+	if offset >= len(data) {
+		return ""
+	}
+
+	// Skip answer name (likely a pointer)
+	if data[offset]&0xC0 == 0xC0 {
+		offset += 2
+	} else {
+		for offset < len(data) && data[offset] != 0 {
+			offset += int(data[offset]) + 1
+		}
+		offset++
+	}
+
+	if offset+10 > len(data) {
+		return ""
+	}
+
+	// Skip TYPE (2), CLASS (2), TTL (4)
+	offset += 8
+
+	// RDLENGTH
+	rdLength := binary.BigEndian.Uint16(data[offset : offset+2])
+	offset += 2
+
+	if offset+int(rdLength) > len(data) || rdLength < 2 {
+		return ""
+	}
+
+	// TXT record: first byte is string length
+	txtLen := int(data[offset])
+	offset++
+
+	if offset+txtLen > len(data) {
+		return ""
+	}
+
+	return string(data[offset : offset+txtLen])
 }
 
 // DNSZoneTransferScript checks for zone transfer
@@ -69,15 +246,15 @@ func (s *DNSZoneTransferScript) Execute(target ScriptTarget) (*ScriptResult, err
 	return result, nil
 }
 
-// NTPMonlistScript checks for NTP monlist command
+// NTPMonlistScript checks NTP service and extracts version/OS information
 type NTPMonlistScript struct{}
 
-func (s *NTPMonlistScript) Name() string { return "ntp-monlist" }
+func (s *NTPMonlistScript) Name() string { return "ntp-info" }
 func (s *NTPMonlistScript) Description() string {
-	return "Checks for NTP monlist command (amplification attack)"
+	return "NTP service enumeration and OS detection via readvar"
 }
 func (s *NTPMonlistScript) Categories() []ScriptCategory {
-	return []ScriptCategory{CategoryVuln, CategoryDiscovery, CategorySafe}
+	return []ScriptCategory{CategoryVersion, CategoryDiscovery, CategorySafe}
 }
 func (s *NTPMonlistScript) PortRule(port int, service string) bool {
 	return port == 123 || strings.Contains(service, "ntp")
@@ -85,10 +262,147 @@ func (s *NTPMonlistScript) PortRule(port int, service string) bool {
 
 func (s *NTPMonlistScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	result.Output = "NTP Service detected\nNote: Use ntpq or ntpdc for enumeration\nExample: ntpq -c readlist <target>\nMonlist: Can reveal IPs of clients (CVE-2013-5211)"
-	result.Findings = append(result.Findings, "NTP server accessible")
 
+	// Send NTP mode 6 (control) readvar request
+	addr := fmt.Sprintf("%s:123", target.Host)
+	conn, err := net.DialTimeout("udp", addr, 5*time.Second)
+	if err != nil {
+		result.Output = "NTP Service detected (could not connect)\nManual check: ntpq -c rv " + target.Host
+		result.Findings = append(result.Findings, "NTP server accessible")
+		return result, nil
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+
+	// NTP control message (mode 6) - readvar request
+	// This queries system variables including version and processor info
+	ntpRequest := []byte{
+		0x16,       // LI=0, VN=2, Mode=6 (control)
+		0x01,       // Response bit=0, Error=0, More=0, Opcode=1 (read variables)
+		0x00, 0x00, // Sequence
+		0x00, 0x00, // Status
+		0x00, 0x00, // Association ID (0 = system)
+		0x00, 0x00, // Offset
+		0x00, 0x00, // Count
+	}
+
+	_, err = conn.Write(ntpRequest)
+	if err != nil {
+		result.Output = "NTP Service detected (query failed)\nManual check: ntpq -c rv " + target.Host
+		result.Findings = append(result.Findings, "NTP server accessible")
+		return result, nil
+	}
+
+	// Read response
+	response := make([]byte, 512)
+	n, err := conn.Read(response)
+	if err != nil || n < 12 {
+		result.Output = "NTP Service detected (no control response)\nNote: Server may not support NTP control messages"
+		result.Findings = append(result.Findings, "NTP server accessible")
+		return result, nil
+	}
+
+	// Parse NTP control response
+	version, processor, system, stratum := parseNTPResponse(response[:n])
+
+	var output strings.Builder
+	output.WriteString("NTP Service Information:\n")
+	output.WriteString("========================\n")
+
+	if version != "" {
+		output.WriteString(fmt.Sprintf("  Version:   %s\n", version))
+		result.Findings = append(result.Findings, "NTP version: "+version)
+	}
+	if processor != "" {
+		output.WriteString(fmt.Sprintf("  Processor: %s\n", processor))
+		result.Findings = append(result.Findings, "Processor: "+processor)
+	}
+	if system != "" {
+		output.WriteString(fmt.Sprintf("  System:    %s\n", system))
+		result.Findings = append(result.Findings, "System: "+system)
+
+		// OS detection from system variable
+		systemLower := strings.ToLower(system)
+		if strings.Contains(systemLower, "linux") {
+			output.WriteString("\n  OS Hint: Linux\n")
+		} else if strings.Contains(systemLower, "freebsd") {
+			output.WriteString("\n  OS Hint: FreeBSD\n")
+		} else if strings.Contains(systemLower, "windows") {
+			output.WriteString("\n  OS Hint: Windows\n")
+		} else if strings.Contains(systemLower, "darwin") || strings.Contains(systemLower, "macos") {
+			output.WriteString("\n  OS Hint: macOS\n")
+		}
+	}
+	if stratum != "" {
+		output.WriteString(fmt.Sprintf("  Stratum:   %s\n", stratum))
+	}
+
+	if version == "" && system == "" {
+		output.WriteString("  (Limited information available)\n")
+		output.WriteString("\nManual enumeration:\n")
+		output.WriteString("  ntpq -c rv " + target.Host + "\n")
+		output.WriteString("  ntpq -c peers " + target.Host + "\n")
+	}
+
+	// Check for monlist vulnerability
+	output.WriteString("\nSecurity Note:\n")
+	output.WriteString("  - Check for CVE-2013-5211 (monlist amplification)\n")
+	output.WriteString("  - Test: ntpdc -c monlist " + target.Host + "\n")
+
+	result.Output = output.String()
 	return result, nil
+}
+
+// parseNTPResponse extracts system variables from NTP control response
+func parseNTPResponse(data []byte) (version, processor, system, stratum string) {
+	if len(data) < 12 {
+		return
+	}
+
+	// Check if it's a valid response (mode 6, response bit set)
+	if data[0]&0x07 != 6 { // Mode must be 6
+		return
+	}
+
+	// Data starts at offset 12
+	if len(data) <= 12 {
+		return
+	}
+
+	// Parse the variable data (format: "name=value,name=value,...")
+	dataStr := string(data[12:])
+
+	// Extract key variables
+	extractVar := func(name string) string {
+		prefix := name + "="
+		idx := strings.Index(dataStr, prefix)
+		if idx == -1 {
+			return ""
+		}
+		start := idx + len(prefix)
+		// Find end (comma, newline, or end of string)
+		end := start
+		inQuote := false
+		for end < len(dataStr) {
+			c := dataStr[end]
+			if c == '"' {
+				inQuote = !inQuote
+			} else if !inQuote && (c == ',' || c == '\r' || c == '\n') {
+				break
+			}
+			end++
+		}
+		value := strings.Trim(dataStr[start:end], "\" ")
+		return value
+	}
+
+	version = extractVar("version")
+	processor = extractVar("processor")
+	system = extractVar("system")
+	stratum = extractVar("stratum")
+
+	return
 }
 
 // TFTPEnumScript detects TFTP service

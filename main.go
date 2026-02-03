@@ -31,6 +31,10 @@ func main() {
 	scriptCategory := flag.String("script-category", "", "Run scripts from specific category (auth, vuln, discovery, etc.)")
 	listScripts := flag.Bool("script-help", false, "List all available scripts")
 
+	// Vulnerability scanning options
+	vulnCheck := flag.Bool("vuln", false, "Check services against vulnerability database")
+	searchsploitUpdate := flag.Bool("searchsploit-update", false, "Update the bundled exploit database")
+
 	// Output options
 	output := flag.String("output", "", "Output file path")
 	flag.StringVar(output, "o", "", "Output file path (shorthand)")
@@ -51,6 +55,15 @@ func main() {
 	if *listScripts {
 		engine := NewScriptEngine(true, "", false)
 		engine.ListScripts()
+		os.Exit(0)
+	}
+
+	// Handle searchsploit update
+	if *searchsploitUpdate {
+		if err := UpdateExploitDB(); err != nil {
+			fmt.Printf(ColorRed+"Error updating exploit database: %v\n"+ColorReset, err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
@@ -80,6 +93,7 @@ func main() {
 		ScanType:       *scanType,
 		OSDetect:       *osDetect,
 		ServiceDetect:  *serviceDetect,
+		VulnCheck:      *vulnCheck,
 		Verbose:        *verbose,
 		PingOnly:       *pingOnly,
 		SkipDown:       *skipDown,
@@ -184,28 +198,81 @@ func printResults(results *ScanResults, config *ScanConfig) {
 		if service == "" {
 			service = "unknown"
 		}
-		
-		// Color code by port type
+
+		// Color code: PRIORITY 1: Vulnerable = RED
 		portColor := ColorCyan
-		if port.Port == 21 || port.Port == 23 || port.Port == 69 {
-			portColor = ColorRed // Insecure services
+		stateColor := ColorGreen
+		if port.Vulnerable {
+			portColor = ColorRed + ColorBold
+			stateColor = ColorRed
+		} else if port.Port == 21 || port.Port == 23 || port.Port == 69 {
+			portColor = ColorYellow // Insecure by design
 		} else if port.Port == 80 || port.Port == 443 || port.Port == 8080 {
 			portColor = ColorGreen // HTTP services
 		} else if port.Port == 139 || port.Port == 445 {
 			portColor = ColorYellow // SMB services
 		}
-		
-		fmt.Printf(portColor+"%-8d "+ColorReset+ColorGreen+"%-10s "+ColorReset+ColorTeal+"%s\n"+ColorReset, 
+
+		fmt.Printf(portColor+"%-8d "+ColorReset+stateColor+"%-10s "+ColorReset+ColorTeal+"%s\n"+ColorReset,
 			port.Port, port.State, service)
-		
+
 		if config.ServiceDetect && port.Version != "" {
 			fmt.Printf(ColorPurple+"         ↳ "+ColorReset+"Version: %s\n", port.Version)
+		}
+
+		// Display vulnerabilities with CVE and EDB-ID
+		if port.Vulnerable && len(port.Vulnerabilities) > 0 {
+			for _, vuln := range port.Vulnerabilities {
+				severityColor := getSeverityColor(vuln.Severity)
+
+				// Format: CVE | EDB-ID (severity) - Title
+				cveDisplay := vuln.CVE
+				if cveDisplay == "" {
+					cveDisplay = "N/A"
+				}
+				edbDisplay := vuln.EDBID
+				if edbDisplay == "" {
+					edbDisplay = "N/A"
+				}
+
+				fmt.Printf(severityColor+"         ⚠ %s | EDB-ID:%s (%s) - %s\n"+ColorReset,
+					cveDisplay, edbDisplay, vuln.Severity, vuln.Title)
+
+				if vuln.Metasploit != "" {
+					fmt.Printf(ColorRed+"           → Metasploit: %s\n"+ColorReset, vuln.Metasploit)
+				}
+				if vuln.ExploitPath != "" && vuln.ExploitPath != "embedded" {
+					fmt.Printf(ColorRed+"           → Exploit: %s\n"+ColorReset, vuln.ExploitPath)
+				}
+			}
 		}
 	}
 
 	if config.OSDetect && results.OS != "" {
 		fmt.Printf("\n"+ColorCyan+ColorBold+"OS Detection:\n"+ColorReset)
 		fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"%s\n", results.OS)
+
+		// Show detailed fingerprint info if available
+		if results.OSDetection != nil && results.OSDetection.Fingerprint != nil {
+			fp := results.OSDetection.Fingerprint
+			fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"Fingerprint: %s\n", fp.String())
+			if results.OSDetection.RawSocketUsed {
+				fmt.Printf(ColorPurple+"  ↳ "+ColorReset+"Method: TCP/IP Stack Analysis\n")
+			}
+		}
+	}
+
+	// Print vulnerability summary
+	if results.VulnSummary != nil && results.VulnSummary.TotalVulns > 0 {
+		fmt.Printf("\n"+ColorRed+ColorBold+"╔════════════════════════════════════════════════╗\n")
+		fmt.Printf("║         VULNERABILITY SUMMARY                  ║\n")
+		fmt.Printf("╚════════════════════════════════════════════════╝\n"+ColorReset)
+
+		fmt.Printf(ColorRed+"  Critical: %d"+ColorReset+"\n", results.VulnSummary.Critical)
+		fmt.Printf(ColorRed+"  High:     %d"+ColorReset+"\n", results.VulnSummary.High)
+		fmt.Printf(ColorYellow+"  Medium:   %d"+ColorReset+"\n", results.VulnSummary.Medium)
+		fmt.Printf(ColorCyan+"  Low:      %d"+ColorReset+"\n", results.VulnSummary.Low)
+		fmt.Printf(ColorBold+"  Total:    %d"+ColorReset+"\n", results.VulnSummary.TotalVulns)
 	}
 
 	// Print script results
@@ -284,10 +351,12 @@ func printNetworkResults(results *NetworkScanResults, config *ScanConfig) {
 				service = "unknown"
 			}
 
-			// Color code by port type
+			// Color code: PRIORITY 1: Vulnerable = RED
 			portColor := ColorCyan
-			if port.Port == 21 || port.Port == 23 || port.Port == 69 {
-				portColor = ColorRed
+			if port.Vulnerable {
+				portColor = ColorRed + ColorBold
+			} else if port.Port == 21 || port.Port == 23 || port.Port == 69 {
+				portColor = ColorYellow
 			} else if port.Port == 80 || port.Port == 443 || port.Port == 8080 {
 				portColor = ColorGreen
 			} else if port.Port == 139 || port.Port == 445 {
@@ -300,6 +369,17 @@ func printNetworkResults(results *NetworkScanResults, config *ScanConfig) {
 				fmt.Printf(" (%s)", port.Version)
 			}
 			fmt.Println()
+
+			// Show vulnerabilities in network scan
+			if port.Vulnerable && len(port.Vulnerabilities) > 0 {
+				for _, vuln := range port.Vulnerabilities {
+					cve := vuln.CVE
+					if cve == "" {
+						cve = "N/A"
+					}
+					fmt.Printf("│  "+ColorRed+"  ⚠ %s | EDB-ID:%s - %s\n"+ColorReset, cve, vuln.EDBID, vuln.Title)
+				}
+			}
 		}
 
 		if config.OSDetect && host.OS != "" {
@@ -326,4 +406,20 @@ func splitLines(s string) []string {
 		result = append(result, current)
 	}
 	return result
+}
+
+// getSeverityColor returns the appropriate color for a vulnerability severity level
+func getSeverityColor(severity string) string {
+	switch severity {
+	case "critical":
+		return ColorRed + ColorBold
+	case "high":
+		return ColorRed
+	case "medium":
+		return ColorYellow
+	case "low":
+		return ColorCyan
+	default:
+		return ColorReset
+	}
 }
