@@ -22,10 +22,26 @@ A lightweight, fast network scanner written in Go, inspired by nmap. GoMap provi
   - Basic OS detection based on open ports and service versions
 
 - **Script Engine (NSE-like)**
-  - 15+ built-in scripts for vulnerability detection, service enumeration, and more
-  - Categories: auth, discovery, vuln, version
+  - 51 built-in scripts for vulnerability detection, service enumeration, and more
+  - Categories: auth, discovery, vuln, version, safe
   - Extensible architecture for custom scripts
   - Concurrent script execution
+
+- **Vulnerability Detection**
+  - Built-in exploit database (ExploitDB integration)
+  - CVE and EDB-ID identification
+  - Metasploit module references
+  - Severity color-coding (critical, high, medium, low)
+  - Automatic database updates with `-searchsploit-update`
+
+- **Network Scanning**
+  - CIDR notation support for subnet scanning
+  - Configurable host concurrency with `-host-threads`
+  - Skip unresponsive hosts with `-skip-down`
+
+- **Output Options**
+  - Multiple formats: JSON, XML, TXT
+  - File output with `-output` flag
 
 - **Performance**
   - Concurrent scanning with configurable thread count
@@ -126,6 +142,49 @@ Check if a host is up (ping scan):
 ./gomap -target example.com -ping
 ```
 
+### Network Scanning (CIDR)
+
+Scan an entire subnet:
+```bash
+./gomap -target 192.168.1.0/24 -ping
+```
+
+Scan subnet with service detection:
+```bash
+./gomap -target 192.168.1.0/24 -ports 22,80,443 -service -host-threads 20
+```
+
+Skip unresponsive hosts for faster scanning:
+```bash
+./gomap -target 10.0.0.0/24 -skip-down -ports 1-1000
+```
+
+### Vulnerability Scanning
+
+Check for known vulnerabilities:
+```bash
+./gomap -target example.com -ports 1-1000 -service -vuln
+```
+
+Update the exploit database:
+```bash
+./gomap -searchsploit-update
+```
+
+### Output to File
+
+Save results in different formats:
+```bash
+# JSON output
+./gomap -target example.com -service -output results.json -output-format json
+
+# XML output
+./gomap -target example.com -service -o results.xml -oF xml
+
+# Text output (default)
+./gomap -target example.com -service -o results.txt
+```
+
 ### Performance Tuning
 
 Adjust timeout and thread count:
@@ -135,20 +194,40 @@ Adjust timeout and thread count:
 
 ## Command-Line Options
 
+### Core Options
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `-target` | `-t` | Target IP address, hostname, or CIDR range | Required |
+| `-ports` | `-p` | Ports to scan (e.g., "80,443" or "1-1000" or "all") | "1-1024" |
+| `-timeout` | | Timeout for each connection | 1s |
+| `-ping-timeout` | | Timeout for host discovery ping | 500ms |
+| `-threads` | | Number of concurrent threads | 100 |
+| `-host-threads` | `-hT` | Concurrent hosts to scan for subnet scans | 10 |
+| `-type` | | Scan type: tcp, syn, udp | tcp |
+
+### Feature Flags
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `-service` | `-sV` | Enable service version detection | false |
+| `-os` | | Enable OS detection | false |
+| `-ping` | | Ping scan only (host discovery) | false |
+| `-skip-down` | | Skip hosts that appear down (faster scanning) | false |
+| `-vuln` | | Check services against vulnerability database | false |
+| `-script` | | Enable script scanning (NSE-like) | false |
+| `-script-category` | | Run scripts from category (auth, vuln, discovery, version) | "" (all) |
+| `-script-help` | | List all available scripts | false |
+| `-v` | | Verbose output | false |
+
+### Output Options
+| Flag | Short | Description | Default |
+|------|-------|-------------|---------|
+| `-output` | `-o` | Output file path | "" |
+| `-output-format` | `-oF` | Output format: json, xml, txt | "txt" |
+
+### Database Options
 | Flag | Description | Default |
 |------|-------------|---------|
-| `-target` | Target IP address or hostname | Required |
-| `-ports` | Ports to scan (e.g., "80,443" or "1-1000") | "1-1024" |
-| `-timeout` | Timeout for each connection | 1s |
-| `-threads` | Number of concurrent threads | 100 |
-| `-type` | Scan type: tcp, syn, udp | tcp |
-| `-service` | Enable service version detection | false |
-| `-os` | Enable OS detection | false |
-| `-script` | Enable script scanning (NSE-like) | false |
-| `-script-category` | Run scripts from category (auth, vuln, discovery) | "" (all) |
-| `-script-help` | List all available scripts | false |
-| `-v` | Verbose output | false |
-| `-ping` | Ping scan only (host discovery) | false |
+| `-searchsploit-update` | Update the bundled exploit database | false |
 
 ## Examples
 
@@ -202,17 +281,38 @@ PORT     STATE    SERVICE
 
 ## Architecture
 
-The scanner is organized into several modules:
+The scanner is organized into 23 Go source files:
 
-- **main.go** - CLI interface and result formatting
-- **types.go** - Data structures and configuration
-- **scanner.go** - Core scanning logic (TCP, UDP, ping)
-- **service_detection.go** - Service identification and OS fingerprinting
-- **utils.go** - Port parsing and service name lookup
-- **script_engine.go** - NSE-like script engine core
-- **scripts_http.go** - HTTP-related vulnerability and discovery scripts
+**Core Components:**
+- **main.go** - CLI interface, argument parsing, result display
+- **types.go** - Data structures (ScanConfig, ScanResults, PortResult, NetworkScanResults)
+- **scanner.go** - Core scanning logic (TCP, UDP, host discovery)
+- **service_detection.go** - Banner grabbing, service identification
+- **utils.go** - Helper functions (port parsing, service name lookup)
+- **output.go** - Result formatting and file output (JSON, XML, TXT)
+
+**OS Fingerprinting:**
+- **os_fingerprint.go** - OS detection implementation
+- **os_signatures.go** - OS signature database
+- **icmp_fingerprint.go** - ICMP-based fingerprinting
+- **protocol_fingerprint.go** - Protocol-level analysis
+- **raw_socket.go** - Raw socket implementation for advanced scanning
+
+**Script Engine (51 scripts):**
+- **script_engine.go** - Core engine and script management
+- **scripts_http.go** - HTTP-related scripts
 - **scripts_services.go** - SSH, FTP, SMTP scripts
 - **scripts_database.go** - Database and SSL/TLS scripts
+- **scripts_smb.go** - SMB enumeration scripts
+- **scripts_win.go** - Windows-specific scripts
+- **scripts_enumeration.go** - Various enumeration scripts
+- **scripts_webapp.go** - Web application testing scripts
+
+**Vulnerability & Exploit Database:**
+- **exploit_db.go** - ExploitDB integration
+- **exploit_update.go** - Database update mechanism
+- **vuln_data.go** - Vulnerability data storage
+- **vuln_db.go** - Vulnerability database interface
 
 ## How It Works
 
@@ -227,8 +327,9 @@ The scanner is organized into several modules:
 - SYN scanning requires root privileges (raw sockets)
 - OS detection is basic compared to nmap's comprehensive fingerprinting
 - UDP scanning is less reliable due to the nature of UDP protocol
-- Script engine has 15+ scripts vs nmap's 600+ NSE scripts (but easily extensible!)
+- Script engine has 51 scripts vs nmap's 600+ NSE scripts (but easily extensible!)
 - ICMP-based ping requires raw sockets (falls back to TCP)
+- Limited to IPv4 (no IPv6 support)
 
 ## Script Engine
 

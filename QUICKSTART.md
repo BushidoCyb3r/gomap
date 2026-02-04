@@ -3,11 +3,14 @@
 ## What is GoMap?
 
 GoMap is a full-featured network scanner written in pure Go, reimplementing core nmap functionality including:
-- TCP/UDP port scanning
+- TCP/UDP/SYN port scanning
 - Service version detection
 - OS fingerprinting
 - Concurrent scanning with configurable threads
-- Multiple scan types
+- NSE-like script engine with 51 built-in scripts
+- Vulnerability detection with ExploitDB integration
+- Network scanning (CIDR notation support)
+- Multiple output formats (JSON, XML, TXT)
 
 ## Building the Project
 
@@ -53,7 +56,7 @@ go build -o gomap .
 
 ### 6. Full Scan (All Features)
 ```bash
-./gomap -target example.com -ports 1-1000 -service -os -v
+./gomap -target example.com -ports 1-1000 -service -os -script -v
 ```
 
 ### 7. UDP Scan
@@ -71,57 +74,125 @@ go build -o gomap .
 ./gomap -target example.com -ping
 ```
 
+### 10. Network Scan (CIDR)
+```bash
+./gomap -target 192.168.1.0/24 -ping -host-threads 20
+```
+
+### 11. Vulnerability Scan
+```bash
+./gomap -target example.com -ports 1-1000 -service -vuln
+```
+
+### 12. Script Scanning
+```bash
+./gomap -target example.com -script -script-category vuln
+```
+
+### 13. Output to File
+```bash
+./gomap -target example.com -service -o results.json -oF json
+```
+
 ## Command-Line Flags
 
+### Core Options
 ```
--target string      Target hostname or IP (required)
--ports string       Ports to scan: "80" or "1-1000" or "22,80,443" (default "1-1024")
--type string        Scan type: tcp, udp, syn (default "tcp")
--threads int        Concurrent threads (default 100)
--timeout duration   Connection timeout (default 1s)
--service           Enable service detection
--os                Enable OS fingerprinting  
+-target, -t string      Target hostname, IP, or CIDR range (required)
+-ports, -p string       Ports to scan: "80" or "1-1000" or "22,80,443" or "all" (default "1-1024")
+-type string            Scan type: tcp, udp, syn (default "tcp")
+-threads int            Concurrent threads (default 100)
+-host-threads, -hT int  Concurrent hosts for subnet scans (default 10)
+-timeout duration       Connection timeout (default 1s)
+-ping-timeout duration  Host discovery timeout (default 500ms)
+```
+
+### Feature Flags
+```
+-service, -sV      Enable service version detection
+-os                Enable OS fingerprinting
 -ping              Host discovery only
+-skip-down         Skip hosts that appear down (faster subnet scanning)
+-vuln              Check services against vulnerability database
+-script            Enable NSE-like script scanning
+-script-category   Run scripts from category: auth, vuln, discovery, version
+-script-help       List all 51 available scripts
 -v                 Verbose output
+```
+
+### Output Options
+```
+-output, -o string        Output file path
+-output-format, -oF string Output format: json, xml, txt (default "txt")
+```
+
+### Database Options
+```
+-searchsploit-update   Update the bundled exploit database
 ```
 
 ## Sample Output
 
 ```
-╔═══════════════════════════════════════╗
-║         GoMap - Network Scanner       ║
-║    Nmap-like tool written in Go       ║
-╚═══════════════════════════════════════╝
+   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██████╗
+  ██╔════╝ ██╔═══██╗████╗ ████║██╔══██╗██╔══██╗
+  ██║  ███╗██║   ██║██╔████╔██║███████║██████╔╝
+  ██║   ██║██║   ██║██║╚██╔╝██║██╔══██║██╔═══╝
+  ╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║
+   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝
+
+          Network Scanner & Exploitation Tool
+          ═══════════════════════════════════════
 
 Resolved example.com to 93.184.216.34
 
-Scan Results for example.com
-Scan started at: 2024-01-28T10:30:00Z
-Scan completed at: 2024-01-28T10:30:03Z
+╔════════════════════════════════════════════════╗
+║           SCAN RESULTS                         ║
+╚════════════════════════════════════════════════╝
+Target:   example.com
+Started:  10:30:00
+Finished: 10:30:03
 Duration: 3.2s
 
-Host is up
+[+] Host is UP
 
 Found 2 open port(s):
 
-PORT     STATE    SERVICE
-80       open     http
-         Version: nginx/1.14.0
-443      open     https
-         Version: nginx/1.14.0
+PORT     STATE      SERVICE
+────     ─────      ───────
+80       open       http
+         ↳ Version: nginx/1.14.0
+443      open       https
+         ↳ Version: nginx/1.14.0
 
-OS Detection: Linux (confidence: 6/10)
+OS Detection:
+  ↳ Linux (confidence: 6/10)
+
+════════════════════════════════════════════════
+Scan complete!
 ```
 
 ## Architecture Overview
 
-The project consists of 5 main Go files:
+The project consists of 23 Go source files organized by functionality:
 
-1. **main.go** - CLI interface, argument parsing, result display
-2. **types.go** - Data structures (ScanConfig, ScanResults, PortResult)
-3. **scanner.go** - Core scanning logic (TCP, UDP, host discovery)
-4. **service_detection.go** - Banner grabbing, service identification, OS fingerprinting
-5. **utils.go** - Helper functions (port parsing, service name lookup)
+**Core (6 files):**
+- `main.go` - CLI interface, argument parsing, result display
+- `types.go` - Data structures (ScanConfig, ScanResults, PortResult, NetworkScanResults)
+- `scanner.go` - Core scanning logic (TCP, UDP, host discovery)
+- `service_detection.go` - Banner grabbing, service identification
+- `utils.go` - Helper functions (port parsing, service name lookup)
+- `output.go` - Result formatting and file output (JSON, XML, TXT)
+
+**OS Fingerprinting (5 files):**
+- `os_fingerprint.go`, `os_signatures.go`, `icmp_fingerprint.go`, `protocol_fingerprint.go`, `raw_socket.go`
+
+**Script Engine (8 files, 51 scripts):**
+- `script_engine.go` - Core engine
+- `scripts_http.go`, `scripts_services.go`, `scripts_database.go`, `scripts_smb.go`, `scripts_win.go`, `scripts_enumeration.go`, `scripts_webapp.go`
+
+**Vulnerability Database (4 files):**
+- `exploit_db.go`, `exploit_update.go`, `vuln_data.go`, `vuln_db.go`
 
 ## Key Features Explained
 
@@ -163,10 +234,10 @@ Flexible port specification:
 
 ## Limitations vs. nmap
 
-- No scripting engine (NSE)
+- 51 scripts vs nmap's 600+ NSE scripts (but easily extensible!)
 - Basic OS detection (nmap has 1000+ fingerprints)
 - SYN scan requires root (falls back to TCP connect)
-- No ICMP ping (uses TCP fallback)
+- ICMP ping requires raw sockets (uses TCP fallback)
 - No advanced evasion techniques
 - Limited to IPv4
 
@@ -199,13 +270,11 @@ Test against legal scanning targets:
 ## Further Development Ideas
 
 - Add IPv6 support
-- Implement proper SYN scanning with raw sockets
 - Add more service fingerprints
-- Create JSON/XML output formats
-- Add scan result export
 - Implement rate limiting
 - Add proxy support
 - Create web UI
+- Add more scripts to the engine
 
 ## Resources
 

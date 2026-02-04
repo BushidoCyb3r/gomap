@@ -17,22 +17,40 @@ chmod +x build.sh
 
 ### Error: "undefined: RDPSecurityScript" (and similar)
 
-**This means the files aren't being compiled together.** 
+**This means the files aren't being compiled together.**
 
-Make sure ALL these files are in the same directory:
+Make sure ALL 23 Go files are in the same directory:
+
+**Core files:**
 - main.go
 - types.go
 - scanner.go
 - utils.go
 - service_detection.go
+- output.go
+
+**OS Fingerprinting:**
+- os_fingerprint.go
+- os_signatures.go
+- icmp_fingerprint.go
+- protocol_fingerprint.go
+- raw_socket.go
+
+**Script Engine:**
 - script_engine.go
 - scripts_http.go
 - scripts_services.go
 - scripts_database.go
 - scripts_smb.go
-- scripts_windows.go
+- scripts_win.go
 - scripts_enumeration.go
 - scripts_webapp.go
+
+**Vulnerability Database:**
+- exploit_db.go
+- exploit_update.go
+- vuln_data.go
+- vuln_db.go
 
 Then run: `go build -o gomap .`
 
@@ -43,7 +61,7 @@ The `.` at the end is important - it tells Go to compile all `.go` files in the 
 Make sure you're in the directory containing all the `.go` files:
 ```bash
 cd /path/to/gomap
-ls *.go  # Should show all 13 files
+ls *.go  # Should show all 23 files
 go build -o gomap .
 ```
 
@@ -69,19 +87,19 @@ If too old, update from https://golang.org/dl/
 1. **Count your files:**
    ```bash
    ls *.go | wc -l
-   # Should output: 13
+   # Should output: 23
    ```
 
 2. **Check all files are in main package:**
    ```bash
    grep "package main" *.go | wc -l
-   # Should output: 13
+   # Should output: 23
    ```
 
 3. **Verify script types exist:**
    ```bash
-   grep "type.*Script struct" scripts_*.go | wc -l
-   # Should output: 52 (one for each script)
+   grep -h "Name().*string" scripts_*.go | wc -l
+   # Should output: 51 (one for each script)
    ```
 
 ## Manual Build Process
@@ -110,25 +128,17 @@ go build -v -o gomap .
 ### Check File Integrity
 
 ```bash
-# Each file should have these approximate line counts:
-wc -l *.go
+# List all Go files to verify they exist:
+ls *.go
 ```
 
-Expected output:
+Expected files (23 total):
 ```
-  90 main.go
-  30 types.go
- 210 scanner.go
- 110 utils.go
- 200 service_detection.go
- 240 script_engine.go
- 230 scripts_http.go
- 150 scripts_services.go
- 300 scripts_database.go
- 230 scripts_smb.go
- 265 scripts_windows.go
- 295 scripts_enumeration.go
- 395 scripts_webapp.go
+exploit_db.go        os_fingerprint.go     scripts_database.go   scripts_webapp.go    utils.go
+exploit_update.go    os_signatures.go      scripts_enumeration.go scripts_win.go      vuln_data.go
+icmp_fingerprint.go  output.go             scripts_http.go       service_detection.go vuln_db.go
+main.go              protocol_fingerprint.go scripts_services.go  types.go
+                     raw_socket.go         scripts_smb.go        scanner.go
 ```
 
 ### Rebuild from Scratch
@@ -138,7 +148,7 @@ Expected output:
 rm *.go gomap
 
 # Re-download ALL files
-# Make sure you get all 13 .go files
+# Make sure you get all 23 .go files
 
 # Then build
 go build -o gomap .
@@ -150,39 +160,85 @@ When the build succeeds, you should see:
 ```bash
 $ ./gomap -script-help
 
-
-   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██████╗ 
+   ██████╗  ██████╗ ███╗   ███╗ █████╗ ██████╗
   ██╔════╝ ██╔═══██╗████╗ ████║██╔══██╗██╔══██╗
   ██║  ███╗██║   ██║██╔████╔██║███████║██████╔╝
-  ██║   ██║██║   ██║██║╚██╔╝██║██╔══██║██╔═══╝ 
-  ╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║     
-   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝     
+  ██║   ██║██║   ██║██║╚██╔╝██║██╔══██║██╔═══╝
+  ╚██████╔╝╚██████╔╝██║ ╚═╝ ██║██║  ██║██║
+   ╚═════╝  ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝
 
           Network Scanner & Exploitation Tool
           ═══════════════════════════════════════
 
-Available Scripts:
-==================
+Available Scripts (51 total):
+=============================
 
 auth Scripts:
   - http-auth: Detects HTTP authentication methods
   - ftp-anon: Checks for anonymous FTP login
-  [... etc ...]
+  - ssh-auth-methods: Enumerates SSH authentication methods
+  [... and more ...]
+
+vuln Scripts:
+  - http-vuln-cve2017-5638: Checks for Apache Struts RCE
+  - ssl-heartbleed: Checks for Heartbleed vulnerability
+  [... and more ...]
+
+discovery Scripts:
+  - http-title: Extracts HTTP page titles
+  - http-headers: Analyzes HTTP response headers
+  [... and more ...]
 ```
 
 ## Getting Help
 
 If you're still stuck:
 1. Make sure you have Go 1.21+
-2. Make sure ALL 13 .go files are present
+2. Make sure ALL 23 .go files are present
 3. Try the manual build process above
 4. Check that files weren't corrupted during download
 
 ## Quick Test After Build
 
 ```bash
-# Test the scanner works
+# Test basic scanning
+./gomap -target scanme.nmap.org -ports 80,443
+
+# Test with scripts
 ./gomap -target scanme.nmap.org -ports 80,443 -script
 
-# Should show open ports and run scripts
+# Test vulnerability scanning
+./gomap -target scanme.nmap.org -ports 80,443 -service -vuln
+
+# Test JSON output
+./gomap -target scanme.nmap.org -ports 80 -o test.json -oF json
+
+# Test network scanning (use your own network)
+./gomap -target 192.168.1.0/24 -ping -host-threads 20 -skip-down
+```
+
+## Common Runtime Issues
+
+### "Permission denied" for SYN scan
+SYN scanning requires root privileges:
+```bash
+sudo ./gomap -target example.com -type syn
+```
+
+### Vulnerability database not found
+Update the exploit database:
+```bash
+./gomap -searchsploit-update
+```
+
+### Network scan too slow
+Increase host threads and skip down hosts:
+```bash
+./gomap -target 10.0.0.0/24 -host-threads 50 -skip-down -timeout 500ms
+```
+
+### Ephemeral port exhaustion on high-port scans
+The scanner automatically handles this, but if you still see issues:
+```bash
+./gomap -target example.com -ports 32768-65535 -threads 30 -timeout 2s
 ```
