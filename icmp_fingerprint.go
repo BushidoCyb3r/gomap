@@ -16,20 +16,20 @@ type ICMPFingerprint struct {
 	ReplyReceived  bool   `json:"reply_received"`
 	ICMPCode       uint8  `json:"icmp_code"`
 	ReplyTTL       int    `json:"reply_ttl"`
-	IPIDPattern    string `json:"ip_id_pattern"`   // "incremental", "random", "zero"
+	IPIDPattern    string `json:"ip_id_pattern"` // "incremental", "random", "zero"
 	DFBit          bool   `json:"df_bit"`
 	ResponseQuoted int    `json:"response_quoted"` // Bytes quoted in error messages
 }
 
 // ICMP types and codes
 const (
-	ICMPEchoReply      = 0
-	ICMPDestUnreach    = 3
-	ICMPEchoRequest    = 8
-	ICMPTimeExceeded   = 11
-	ICMPTimestamp      = 13
-	ICMPTimestampReply = 14
-	ICMPAddressMask    = 17
+	ICMPEchoReply        = 0
+	ICMPDestUnreach      = 3
+	ICMPEchoRequest      = 8
+	ICMPTimeExceeded     = 11
+	ICMPTimestamp        = 13
+	ICMPTimestampReply   = 14
+	ICMPAddressMask      = 17
 	ICMPAddressMaskReply = 18
 )
 
@@ -148,6 +148,62 @@ func ICMPProbe(targetIP string, timeout time.Duration) (*ICMPFingerprint, error)
 	}
 
 	return result, nil
+}
+
+// ICMPEchoPing sends a single ICMP echo request and reports whether a matching
+// echo reply arrives within timeout. Used for host discovery. Requires root for
+// the raw socket; returns (false, err) when unprivileged so callers can fall
+// back to TCP-based discovery.
+func ICMPEchoPing(targetIP string, timeout time.Duration) (bool, error) {
+	dst := net.ParseIP(targetIP)
+	if dst == nil {
+		return false, fmt.Errorf("invalid IP: %s", targetIP)
+	}
+	dst = dst.To4()
+	if dst == nil {
+		return false, fmt.Errorf("IPv4 only")
+	}
+
+	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_ICMP)
+	if err != nil {
+		return false, err
+	}
+	defer syscall.Close(fd)
+
+	tv := syscall.Timeval{
+		Sec:  int64(timeout / time.Second),
+		Usec: int64((timeout % time.Second) / time.Microsecond),
+	}
+	_ = syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &tv)
+
+	var addr syscall.SockaddrInet4
+	copy(addr.Addr[:], dst)
+	pkt := buildICMPEchoRequest(uint16(os.Getpid()&0xFFFF), 1)
+	if err := syscall.Sendto(fd, pkt, 0, &addr); err != nil {
+		return false, err
+	}
+
+	deadline := time.Now().Add(timeout)
+	buf := make([]byte, 1500)
+	for time.Now().Before(deadline) {
+		n, from, err := syscall.Recvfrom(fd, buf, 0)
+		if err != nil {
+			return false, nil // timeout: no reply
+		}
+		if f4, ok := from.(*syscall.SockaddrInet4); ok {
+			if !net.IP(f4.Addr[:]).To4().Equal(dst) {
+				continue // reply from a different host
+			}
+		}
+		ipHeaderLen := int(buf[0]&0x0F) * 4
+		if n < ipHeaderLen+8 {
+			continue
+		}
+		if buf[ipHeaderLen] == ICMPEchoReply {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // buildICMPEchoRequest creates an ICMP echo request packet

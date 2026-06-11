@@ -23,10 +23,10 @@ type OSFingerprint struct {
 // OSMatch represents a potential OS match with confidence score
 type OSMatch struct {
 	Name       string  `json:"name" xml:"name"`
-	Family     string  `json:"family" xml:"family"`     // Windows, Linux, BSD, macOS, etc.
-	Version    string  `json:"version" xml:"version"`   // Specific version if known
+	Family     string  `json:"family" xml:"family"`         // Windows, Linux, BSD, macOS, etc.
+	Version    string  `json:"version" xml:"version"`       // Specific version if known
 	Confidence float64 `json:"confidence" xml:"confidence"` // 0.0 to 1.0
-	Method     string  `json:"method" xml:"method"`     // tcp, icmp, smb, ssh, banner, combined
+	Method     string  `json:"method" xml:"method"`         // tcp, icmp, smb, ssh, banner, combined
 }
 
 // OSDetectionResult holds all OS detection data from various methods
@@ -91,6 +91,54 @@ func (r *OSDetectionResult) SelectBestMatch() {
 	}
 
 	r.BestMatch = best
+}
+
+// IsAmbiguous reports whether the OS result is too close to call: the two
+// highest-confidence candidate families score within 0.1 of each other.
+func (r *OSDetectionResult) IsAmbiguous() bool {
+	best := map[string]float64{}
+	for _, m := range r.Matches {
+		key := m.Family
+		if key == "" {
+			key = m.Name
+		}
+		if m.Confidence > best[key] {
+			best[key] = m.Confidence
+		}
+	}
+	if len(best) < 2 {
+		return false
+	}
+	first, second := -1.0, -1.0
+	for _, c := range best {
+		if c > first {
+			second = first
+			first = c
+		} else if c > second {
+			second = c
+		}
+	}
+	return second >= 0 && first-second < 0.1
+}
+
+// OSSummary renders the best OS match with an honesty caveat. OS detection in
+// this tool is heuristic (TTL/window/option matching against a small, static
+// signature set), so the output is explicitly labelled and ambiguous results
+// are flagged rather than presented as fact.
+func (r *OSDetectionResult) OSSummary() string {
+	if r.BestMatch == nil {
+		return ""
+	}
+	s := r.BestMatch.String()
+	if r.BestMatch.Confidence < 0.7 {
+		s += " [heuristic guess - low confidence]"
+	} else {
+		s += " [heuristic]"
+	}
+	if r.IsAmbiguous() {
+		s += "; other OS families scored similarly"
+	}
+	return s
 }
 
 // MergeResults combines multiple OS detection results

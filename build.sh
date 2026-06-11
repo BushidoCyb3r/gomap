@@ -18,9 +18,13 @@ fi
 echo "[*] Go version: $(go version | cut -d' ' -f3)"
 echo ""
 
+# Derive a version string from git (falls back to "dev" when unavailable)
+VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+echo "[*] Version: ${VERSION}"
+
 # Build with all source files
 echo "[*] Building GoMap..."
-go build -ldflags="-s -w" -o gomap .
+go build -ldflags="-s -w -X main.version=${VERSION}" -o gomap .
 
 if [ $? -eq 0 ]; then
     echo ""

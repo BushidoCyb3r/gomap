@@ -49,15 +49,15 @@ type HTTPFingerprint struct {
 
 // TLSFingerprint contains TLS handshake analysis
 type TLSFingerprint struct {
-	JA3S            string   `json:"ja3s"`
-	Version         string   `json:"tls_version"`
-	CipherSuite     string   `json:"cipher_suite"`
-	Extensions      []string `json:"extensions"`
-	ALPN            []string `json:"alpn"`
-	CertIssuer      string   `json:"cert_issuer"`
-	CertSubject     string   `json:"cert_subject"`
-	CertExpiry      string   `json:"cert_expiry"`
-	OSHint          string   `json:"os_hint"`
+	JA3S        string   `json:"ja3s"`
+	Version     string   `json:"tls_version"`
+	CipherSuite string   `json:"cipher_suite"`
+	Extensions  []string `json:"extensions"`
+	ALPN        []string `json:"alpn"`
+	CertIssuer  string   `json:"cert_issuer"`
+	CertSubject string   `json:"cert_subject"`
+	CertExpiry  string   `json:"cert_expiry"`
+	OSHint      string   `json:"os_hint"`
 }
 
 // SSHKexInit message parsing constants
@@ -420,16 +420,16 @@ func SMBEnhancedFingerprint(target string, port int, timeout time.Duration) (*Pr
 	// SMB2 Negotiate Request
 	smb2NegotiateRequest := []byte{
 		// NetBIOS Session Service Header
-		0x00,                   // Message Type
-		0x00, 0x00, 0x66,       // Length (102 bytes)
+		0x00,             // Message Type
+		0x00, 0x00, 0x66, // Length (102 bytes)
 
 		// SMB2 Header (64 bytes)
 		0xFE, 0x53, 0x4D, 0x42, // Protocol ID (0xFE 'SMB')
-		0x40, 0x00,             // Header Length (64)
-		0x00, 0x00,             // Credit Charge
+		0x40, 0x00, // Header Length (64)
+		0x00, 0x00, // Credit Charge
 		0x00, 0x00, 0x00, 0x00, // Status
-		0x00, 0x00,             // Command (NEGOTIATE)
-		0x00, 0x00,             // Credits Requested
+		0x00, 0x00, // Command (NEGOTIATE)
+		0x00, 0x00, // Credits Requested
 		0x00, 0x00, 0x00, 0x00, // Flags
 		0x00, 0x00, 0x00, 0x00, // Next Command
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Message ID
@@ -440,10 +440,10 @@ func SMBEnhancedFingerprint(target string, port int, timeout time.Duration) (*Pr
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Signature
 
 		// SMB2 NEGOTIATE Request (38 bytes)
-		0x24, 0x00,             // Structure Size (36)
-		0x05, 0x00,             // Dialect Count (5)
-		0x01, 0x00,             // Security Mode
-		0x00, 0x00,             // Reserved
+		0x24, 0x00, // Structure Size (36)
+		0x05, 0x00, // Dialect Count (5)
+		0x01, 0x00, // Security Mode
+		0x00, 0x00, // Reserved
 		0x00, 0x00, 0x00, 0x00, // Capabilities
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // Client GUID
@@ -716,20 +716,80 @@ func CompareVersions(v1, v2 string) int {
 	}
 
 	for i := 0; i < maxLen; i++ {
-		var n1, n2 int
+		var s1, s2 string
 		if i < len(parts1) {
-			n1, _ = strconv.Atoi(strings.TrimLeft(parts1[i], "0"))
+			s1 = parts1[i]
 		}
 		if i < len(parts2) {
-			n2, _ = strconv.Atoi(strings.TrimLeft(parts2[i], "0"))
+			s2 = parts2[i]
 		}
 
-		if n1 < n2 {
-			return -1
-		} else if n1 > n2 {
+		// Split each component into its numeric prefix and any trailing
+		// suffix (e.g. "2p1" -> 2, "p1"; "3c" -> 3, "c"). This keeps version
+		// comparison correct for real-world banners like OpenSSH "8.2p1" or
+		// "1.3.3c", which the previous strconv.Atoi-only path collapsed to 0.
+		n1, suf1 := splitNumericPrefix(s1)
+		n2, suf2 := splitNumericPrefix(s2)
+
+		if n1 != n2 {
+			if n1 < n2 {
+				return -1
+			}
 			return 1
+		}
+
+		if c := compareVersionSuffix(suf1, suf2); c != 0 {
+			return c
 		}
 	}
 
 	return 0
+}
+
+// splitNumericPrefix splits a version component into its leading integer and
+// the remaining suffix string. "12p3" -> (12, "p3"), "rc1" -> (0, "rc1").
+func splitNumericPrefix(s string) (int, string) {
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	n := 0
+	if i > 0 {
+		n, _ = strconv.Atoi(s[:i])
+	}
+	return n, s[i:]
+}
+
+// compareVersionSuffix orders suffixes by release semantics:
+// pre-release (rc/alpha/beta/pre/dev or a leading '-'/'~') < final release ("")
+// < patch level (e.g. "p1", "c"). Within the same class it falls back to a
+// lexical comparison so "p1" < "p2".
+func compareVersionSuffix(a, b string) int {
+	if a == b {
+		return 0
+	}
+	ra, rb := versionSuffixRank(a), versionSuffixRank(b)
+	if ra != rb {
+		if ra < rb {
+			return -1
+		}
+		return 1
+	}
+	if a < b {
+		return -1
+	}
+	return 1
+}
+
+func versionSuffixRank(s string) int {
+	if s == "" {
+		return 1 // final release
+	}
+	ls := strings.ToLower(s)
+	for _, pre := range []string{"-", "~", "rc", "alpha", "beta", "pre", "dev"} {
+		if strings.HasPrefix(ls, pre) {
+			return 0 // pre-release
+		}
+	}
+	return 2 // patch level
 }

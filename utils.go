@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ProgressBar represents a terminal progress bar
@@ -17,6 +18,7 @@ type ProgressBar struct {
 	mu        sync.Mutex
 	cancelled bool
 	label     string
+	start     time.Time
 }
 
 // NewProgressBar creates a new progress bar
@@ -25,6 +27,7 @@ func NewProgressBar(total int) *ProgressBar {
 		total: total,
 		width: 40,
 		label: "hosts",
+		start: time.Now(),
 	}
 }
 
@@ -34,6 +37,7 @@ func NewProgressBarWithLabel(total int, label string) *ProgressBar {
 		total: total,
 		width: 40,
 		label: label,
+		start: time.Now(),
 	}
 }
 
@@ -75,8 +79,24 @@ func (p *ProgressBar) render() {
 		status = ColorYellow + " [STOPPING]" + ColorReset
 	}
 
-	fmt.Printf("\r"+ColorCyan+"[*] "+ColorReset+"Progress: "+ColorPurple+"%s"+ColorReset+" %d/%d (%.1f%%)%s    ",
-		bar, p.current, p.total, percent*100, status)
+	// Rate (items/sec) and ETA, once there's enough signal to estimate.
+	rateETA := ""
+	if !p.start.IsZero() {
+		elapsed := time.Since(p.start)
+		if p.current > 0 && elapsed > 0 {
+			rate := float64(p.current) / elapsed.Seconds()
+			remaining := p.total - p.current
+			if rate > 0 && remaining > 0 {
+				eta := time.Duration(float64(remaining)/rate) * time.Second
+				rateETA = fmt.Sprintf(" %.0f/s ETA %s", rate, eta.String())
+			} else {
+				rateETA = fmt.Sprintf(" %.0f/s", rate)
+			}
+		}
+	}
+
+	fmt.Printf("\r"+ColorCyan+"[*] "+ColorReset+"Progress: "+ColorPurple+"%s"+ColorReset+" %d/%d (%.1f%%)%s%s    ",
+		bar, p.current, p.total, percent*100, ColorTeal+rateETA+ColorReset, status)
 }
 
 // Finish completes the progress bar

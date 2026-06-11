@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -9,20 +10,20 @@ import (
 type ScriptCategory string
 
 const (
-	CategoryAuth        ScriptCategory = "auth"
-	CategoryBroadcast   ScriptCategory = "broadcast"
-	CategoryBruteforce  ScriptCategory = "brute"
-	CategoryDefault     ScriptCategory = "default"
-	CategoryDiscovery   ScriptCategory = "discovery"
-	CategoryDos         ScriptCategory = "dos"
-	CategoryExploit     ScriptCategory = "exploit"
-	CategoryExternal    ScriptCategory = "external"
-	CategoryFuzzer      ScriptCategory = "fuzzer"
-	CategoryIntrusive   ScriptCategory = "intrusive"
-	CategoryMalware     ScriptCategory = "malware"
-	CategorySafe        ScriptCategory = "safe"
-	CategoryVersion     ScriptCategory = "version"
-	CategoryVuln        ScriptCategory = "vuln"
+	CategoryAuth       ScriptCategory = "auth"
+	CategoryBroadcast  ScriptCategory = "broadcast"
+	CategoryBruteforce ScriptCategory = "brute"
+	CategoryDefault    ScriptCategory = "default"
+	CategoryDiscovery  ScriptCategory = "discovery"
+	CategoryDos        ScriptCategory = "dos"
+	CategoryExploit    ScriptCategory = "exploit"
+	CategoryExternal   ScriptCategory = "external"
+	CategoryFuzzer     ScriptCategory = "fuzzer"
+	CategoryIntrusive  ScriptCategory = "intrusive"
+	CategoryMalware    ScriptCategory = "malware"
+	CategorySafe       ScriptCategory = "safe"
+	CategoryVersion    ScriptCategory = "version"
+	CategoryVuln       ScriptCategory = "vuln"
 )
 
 // Script represents a network reconnaissance script
@@ -69,10 +70,10 @@ func NewScriptEngine(enabled bool, category ScriptCategory, verbose bool) *Scrip
 		category: category,
 		verbose:  verbose,
 	}
-	
+
 	// Register all available scripts
 	engine.registerScripts()
-	
+
 	return engine
 }
 
@@ -93,17 +94,17 @@ func (se *ScriptEngine) registerScripts() {
 	se.scripts = append(se.scripts, &HTTPXSSScript{})
 	se.scripts = append(se.scripts, &HTTPLFIScript{})
 	se.scripts = append(se.scripts, &HTTPWordPressScript{})
-	
+
 	// SSH/FTP/SMTP scripts
 	se.scripts = append(se.scripts, &FTPAnonScript{})
 	se.scripts = append(se.scripts, &SSHAuthMethodsScript{})
 	se.scripts = append(se.scripts, &SSHVersionScript{})
 	se.scripts = append(se.scripts, &SMTPCommandsScript{})
-	
+
 	// SSL/TLS scripts
 	se.scripts = append(se.scripts, &SSLCertScript{})
 	se.scripts = append(se.scripts, &SSLVulnScript{})
-	
+
 	// Database scripts
 	se.scripts = append(se.scripts, &MySQLInfoScript{})
 	se.scripts = append(se.scripts, &RedisInfoScript{})
@@ -111,7 +112,7 @@ func (se *ScriptEngine) registerScripts() {
 	se.scripts = append(se.scripts, &CassandraScript{})
 	se.scripts = append(se.scripts, &MSQLServerInfoScript{})
 	se.scripts = append(se.scripts, &ElasticsearchScript{})
-	
+
 	// SMB/Windows scripts
 	se.scripts = append(se.scripts, &SMBVersionScript{})
 	se.scripts = append(se.scripts, &SMBSigningScript{})
@@ -125,10 +126,10 @@ func (se *ScriptEngine) registerScripts() {
 	se.scripts = append(se.scripts, &WinRMScript{})
 	se.scripts = append(se.scripts, &LDAPAnonBindScript{})
 	se.scripts = append(se.scripts, &KerberosEnumScript{})
-	
+
 	// VNC and remote access
 	se.scripts = append(se.scripts, &VNCAuthScript{})
-	
+
 	// Network services
 	se.scripts = append(se.scripts, &NFSExportScript{})
 	se.scripts = append(se.scripts, &DNSVersionScript{})
@@ -141,6 +142,9 @@ func (se *ScriptEngine) registerScripts() {
 	se.scripts = append(se.scripts, &DistCCScript{})
 	se.scripts = append(se.scripts, &RSyncScript{})
 	se.scripts = append(se.scripts, &SNMPEnumScript{})
+
+	// FTP advanced checks
+	se.scripts = append(se.scripts, &FTPBounceScript{})
 }
 
 // RunScripts executes applicable scripts for a target
@@ -202,13 +206,13 @@ func (se *ScriptEngine) RunScripts(target ScriptTarget) []ScriptResult {
 // getApplicableScripts returns scripts that should run for the target
 func (se *ScriptEngine) getApplicableScripts(target ScriptTarget) []Script {
 	var applicable []Script
-	
+
 	for _, script := range se.scripts {
 		// FIRST: Check if script applies to this port/service (REQUIRED)
 		if !script.PortRule(target.Port, target.Service) {
 			continue // Skip if port/service doesn't match
 		}
-		
+
 		// SECOND: If category filter is set, script MUST be in that category
 		if se.category != "" {
 			matches := false
@@ -222,28 +226,36 @@ func (se *ScriptEngine) getApplicableScripts(target ScriptTarget) []Script {
 				continue // Skip if category doesn't match
 			}
 		}
-		
+
 		// Both conditions met - include this script
 		applicable = append(applicable, script)
 	}
-	
+
 	return applicable
 }
 
 // ListScripts lists all available scripts
 func (se *ScriptEngine) ListScripts() {
+	title := fmt.Sprintf("AVAILABLE SCRIPTS (%d Total)", len(se.scripts))
+	const boxWidth = 48
+	pad := boxWidth - len(title)
+	if pad < 0 {
+		pad = 0
+	}
+	left := pad / 2
+	right := pad - left
 	fmt.Println(ColorCyan + ColorBold + "\n╔════════════════════════════════════════════════╗")
-	fmt.Println("║         AVAILABLE SCRIPTS (52 Total)           ║")
+	fmt.Printf("║%s%s%s║\n", strings.Repeat(" ", left), title, strings.Repeat(" ", right))
 	fmt.Println("╚════════════════════════════════════════════════╝" + ColorReset)
-	
+
 	categoryMap := make(map[ScriptCategory][]Script)
-	
+
 	for _, script := range se.scripts {
 		for _, cat := range script.Categories() {
 			categoryMap[cat] = append(categoryMap[cat], script)
 		}
 	}
-	
+
 	categoryColors := map[ScriptCategory]string{
 		CategoryAuth:      ColorGreen,
 		CategoryDiscovery: ColorCyan,
@@ -252,18 +264,18 @@ func (se *ScriptEngine) ListScripts() {
 		CategoryDefault:   ColorTeal,
 		CategorySafe:      ColorGreen,
 	}
-	
+
 	for category, scripts := range categoryMap {
 		color := categoryColors[category]
 		if color == "" {
 			color = ColorCyan
 		}
-		
-		fmt.Printf("\n" + color + ColorBold + "═══ %s Scripts ═══\n" + ColorReset, category)
+
+		fmt.Printf("\n"+color+ColorBold+"═══ %s Scripts ═══\n"+ColorReset, category)
 		for _, script := range scripts {
 			fmt.Printf(ColorPurple+"  • "+ColorReset+ColorBold+"%s"+ColorReset+": %s\n", script.Name(), script.Description())
 		}
 	}
-	
+
 	fmt.Println(ColorCyan + "\n════════════════════════════════════════════════" + ColorReset)
 }

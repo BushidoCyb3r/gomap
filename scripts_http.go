@@ -18,15 +18,15 @@ func isHTTPService(port int, service string) bool {
 			return true
 		}
 	}
-	
+
 	// Check service name for HTTP indicators
 	serviceLower := strings.ToLower(service)
-	return strings.Contains(serviceLower, "http") || 
-	       strings.Contains(serviceLower, "web") ||
-	       strings.Contains(serviceLower, "www") ||
-	       strings.Contains(serviceLower, "apache") ||
-	       strings.Contains(serviceLower, "nginx") ||
-	       strings.Contains(serviceLower, "iis")
+	return strings.Contains(serviceLower, "http") ||
+		strings.Contains(serviceLower, "web") ||
+		strings.Contains(serviceLower, "www") ||
+		strings.Contains(serviceLower, "apache") ||
+		strings.Contains(serviceLower, "nginx") ||
+		strings.Contains(serviceLower, "iis")
 }
 
 // HTTPAuthScript detects HTTP authentication methods
@@ -46,22 +46,22 @@ func (s *HTTPAuthScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	if target.Port == 443 || target.Port == 8443 {
 		url = fmt.Sprintf("https://%s:%d/", target.Host, target.Port)
 	}
-	
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	if resp.StatusCode == 401 {
 		authHeader := resp.Header.Get("WWW-Authenticate")
 		if authHeader != "" {
@@ -71,7 +71,7 @@ func (s *HTTPAuthScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	} else {
 		result.Output = "No HTTP authentication detected"
 	}
-	
+
 	return result, nil
 }
 
@@ -92,32 +92,32 @@ func (s *HTTPHeadersScript) Execute(target ScriptTarget) (*ScriptResult, error) 
 	if target.Port == 443 || target.Port == 8443 {
 		url = fmt.Sprintf("https://%s:%d/", target.Host, target.Port)
 	}
-	
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	var output strings.Builder
 	output.WriteString("HTTP Headers:\n")
-	
+
 	for key, values := range resp.Header {
 		for _, value := range values {
 			output.WriteString(fmt.Sprintf("  %s: %s\n", key, value))
 			result.Findings = append(result.Findings, fmt.Sprintf("%s: %s", key, value))
 		}
 	}
-	
+
 	result.Output = output.String()
 	return result, nil
 }
@@ -139,32 +139,32 @@ func (s *HTTPTitleScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	if target.Port == 443 || target.Port == 8443 {
 		url = fmt.Sprintf("https://%s:%d/", target.Host, target.Port)
 	}
-	
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	// Extract title
 	bodyStr := string(body)
 	titleStart := strings.Index(strings.ToLower(bodyStr), "<title>")
 	titleEnd := strings.Index(strings.ToLower(bodyStr), "</title>")
-	
+
 	if titleStart != -1 && titleEnd != -1 && titleEnd > titleStart {
 		title := bodyStr[titleStart+7 : titleEnd]
 		title = strings.TrimSpace(title)
@@ -173,7 +173,7 @@ func (s *HTTPTitleScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	} else {
 		result.Output = "No title found"
 	}
-	
+
 	return result, nil
 }
 
@@ -194,23 +194,23 @@ func (s *HTTPVulnScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	if target.Port == 443 || target.Port == 8443 {
 		url = fmt.Sprintf("https://%s:%d/", target.Host, target.Port)
 	}
-	
+
 	client := &http.Client{
 		Timeout: 5 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 		},
 	}
-	
+
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	
+
 	result := &ScriptResult{ScriptName: s.Name()}
 	var findings []string
-	
+
 	// Check for missing security headers
 	if resp.Header.Get("X-Frame-Options") == "" {
 		findings = append(findings, "Missing X-Frame-Options header (Clickjacking risk)")
@@ -224,26 +224,26 @@ func (s *HTTPVulnScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	if resp.Header.Get("Content-Security-Policy") == "" {
 		findings = append(findings, "Missing Content-Security-Policy header")
 	}
-	
+
 	// Check for information disclosure
 	server := resp.Header.Get("Server")
 	if server != "" && (strings.Contains(server, "/") || strings.Contains(server, "(")) {
 		findings = append(findings, fmt.Sprintf("Server version disclosed: %s", server))
 	}
-	
+
 	xPoweredBy := resp.Header.Get("X-Powered-By")
 	if xPoweredBy != "" {
 		findings = append(findings, fmt.Sprintf("Technology disclosed: %s", xPoweredBy))
 	}
-	
+
 	result.Findings = findings
 	result.Vulnerable = len(findings) > 0
-	
+
 	if len(findings) > 0 {
 		result.Output = fmt.Sprintf("Found %d security issues:\n  - %s", len(findings), strings.Join(findings, "\n  - "))
 	} else {
 		result.Output = "No common vulnerabilities detected"
 	}
-	
+
 	return result, nil
 }

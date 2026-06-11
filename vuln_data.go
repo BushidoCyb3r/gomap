@@ -381,12 +381,17 @@ func matchVulnEntries(entries []ServiceVulnEntry, version string) []Vulnerabilit
 
 	for _, entry := range entries {
 		matched := false
+		// versionVerified is true only when the match was confirmed against an
+		// observed version (regex or range). A match made without version
+		// evidence is a possibility, not a confirmation, and is labelled as such.
+		versionVerified := false
 
-		// Check version pattern
-		if entry.VersionPattern != "" {
+		// Check version pattern (requires an observed version)
+		if entry.VersionPattern != "" && version != "" {
 			if re, err := regexp.Compile(entry.VersionPattern); err == nil {
 				if re.MatchString(version) {
 					matched = true
+					versionVerified = true
 				}
 			}
 		}
@@ -397,29 +402,50 @@ func matchVulnEntries(entries []ServiceVulnEntry, version string) []Vulnerabilit
 				if CompareVersions(version, entry.MinVersion) >= 0 &&
 					CompareVersions(version, entry.MaxVersion) <= 0 {
 					matched = true
+					versionVerified = true
 				}
 			} else if entry.MaxVersion != "" {
 				if CompareVersions(version, entry.MaxVersion) <= 0 {
 					matched = true
+					versionVerified = true
 				}
 			} else if entry.MinVersion != "" {
 				if CompareVersions(version, entry.MinVersion) >= 0 {
 					matched = true
+					versionVerified = true
 				}
 			}
 		}
 
-		// If no version constraints or no version provided, include all
+		// Entry with no version constraints and no observed version: applies to
+		// the service generally, but cannot be confirmed against a version.
 		if !matched && version == "" && entry.MinVersion == "" && entry.MaxVersion == "" && entry.VersionPattern == "" {
 			matched = true
+			versionVerified = false
 		}
 
 		if matched {
-			vulns = append(vulns, entry.Vulns...)
+			for _, v := range entry.Vulns {
+				if !versionVerified {
+					v.Verified = false
+					v.Title = markUnconfirmed(v.Title)
+				}
+				vulns = append(vulns, v)
+			}
 		}
 	}
 
 	return vulns
+}
+
+// markUnconfirmed annotates a vulnerability title that was matched without
+// confirming the target's version, so findings are never presented as certain.
+func markUnconfirmed(title string) string {
+	const suffix = " (unconfirmed: version not verified)"
+	if strings.HasSuffix(title, suffix) {
+		return title
+	}
+	return title + suffix
 }
 
 // GetMetasploitModule returns the Metasploit module path for a vulnerability

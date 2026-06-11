@@ -386,8 +386,8 @@ func buildSNMPGetRequest(community string, oid []byte) []byte {
 	// PDU: GetRequest-PDU (0xA0)
 	pdu := []byte{0xA0}
 	requestID := []byte{0x02, 0x04, 0x00, 0x00, 0x00, 0x01} // INTEGER request-id
-	errorStatus := []byte{0x02, 0x01, 0x00}                  // INTEGER 0
-	errorIndex := []byte{0x02, 0x01, 0x00}                   // INTEGER 0
+	errorStatus := []byte{0x02, 0x01, 0x00}                 // INTEGER 0
+	errorIndex := []byte{0x02, 0x01, 0x00}                  // INTEGER 0
 	pduContent := append(requestID, errorStatus...)
 	pduContent = append(pduContent, errorIndex...)
 	pduContent = append(pduContent, varBindList...)

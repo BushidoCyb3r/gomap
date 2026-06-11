@@ -143,9 +143,52 @@ func (s *FTPBounceScript) PortRule(port int, service string) bool {
 func (s *FTPBounceScript) Execute(target ScriptTarget) (*ScriptResult, error) {
 	result := &ScriptResult{ScriptName: s.Name()}
 
-	// This is a simplified check - full implementation would be more complex
-	result.Output = "FTP bounce check: Server configuration needed for full test"
-	result.Findings = append(result.Findings, "Limited check performed")
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", target.Host, target.Port), 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(8 * time.Second))
+
+	readResp := func() string {
+		buf := make([]byte, 1024)
+		n, _ := conn.Read(buf)
+		return strings.TrimSpace(string(buf[:n]))
+	}
+
+	// Greeting banner
+	banner := readResp()
+	result.Findings = append(result.Findings, fmt.Sprintf("Banner: %s", banner))
+
+	// The PORT command generally requires an authenticated session; attempt an
+	// anonymous login first.
+	conn.Write([]byte("USER anonymous\r\n"))
+	userResp := readResp()
+	conn.Write([]byte("PASS anonymous@example.com\r\n"))
+	passResp := readResp()
+	loggedIn := strings.Contains(userResp, "230") || strings.Contains(passResp, "230")
+
+	// Direct the data connection at a foreign address (loopback:80 here). We only
+	// observe whether the server *accepts* the PORT command; no data-transfer
+	// command is ever sent, so no third party is actually contacted. A server
+	// that accepts a foreign PORT can be abused to proxy/scan other hosts.
+	conn.Write([]byte("PORT 127,0,0,1,0,80\r\n"))
+	portResp := readResp()
+
+	switch {
+	case strings.HasPrefix(portResp, "2"): // 200 PORT command successful
+		result.Output = "Server accepted a foreign PORT command - vulnerable to FTP bounce"
+		result.Findings = append(result.Findings, "FTP bounce: foreign PORT accepted ("+portResp+")")
+		result.Vulnerable = true
+	case strings.HasPrefix(portResp, "5"): // 5xx rejected
+		result.Output = "Server rejected the foreign PORT command - not vulnerable to FTP bounce"
+	case !loggedIn:
+		result.Output = "Anonymous login refused; FTP bounce could not be conclusively tested"
+	case portResp == "":
+		result.Output = "No response to PORT command; FTP bounce could not be conclusively tested"
+	default:
+		result.Output = "Inconclusive PORT response: " + portResp
+	}
 
 	return result, nil
 }

@@ -371,13 +371,13 @@ func TCPSYNProbe(targetIP string, port int, timeout time.Duration) (*OSFingerpri
 func buildTCPSYNPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16) []byte {
 	// IP Header (20 bytes)
 	ipHeader := make([]byte, 20)
-	ipHeader[0] = 0x45                                        // Version 4, IHL 5
-	ipHeader[1] = 0x00                                        // TOS
-	binary.BigEndian.PutUint16(ipHeader[2:4], 60)             // Total length (IP + TCP + options)
-	binary.BigEndian.PutUint16(ipHeader[4:6], uint16(12345))  // ID
-	binary.BigEndian.PutUint16(ipHeader[6:8], 0x4000)         // Flags (DF) + Fragment offset
-	ipHeader[8] = 64                                          // TTL
-	ipHeader[9] = syscall.IPPROTO_TCP                         // Protocol
+	ipHeader[0] = 0x45                                       // Version 4, IHL 5
+	ipHeader[1] = 0x00                                       // TOS
+	binary.BigEndian.PutUint16(ipHeader[2:4], 60)            // Total length (IP + TCP + options)
+	binary.BigEndian.PutUint16(ipHeader[4:6], uint16(12345)) // ID
+	binary.BigEndian.PutUint16(ipHeader[6:8], 0x4000)        // Flags (DF) + Fragment offset
+	ipHeader[8] = 64                                         // TTL
+	ipHeader[9] = syscall.IPPROTO_TCP                        // Protocol
 	copy(ipHeader[12:16], srcIP)
 	copy(ipHeader[16:20], dstIP)
 	// Checksum calculated by kernel with IP_HDRINCL
@@ -387,10 +387,10 @@ func buildTCPSYNPacket(srcIP, dstIP net.IP, srcPort, dstPort uint16) []byte {
 	binary.BigEndian.PutUint16(tcpHeader[0:2], srcPort)
 	binary.BigEndian.PutUint16(tcpHeader[2:4], dstPort)
 	binary.BigEndian.PutUint32(tcpHeader[4:8], uint32(time.Now().UnixNano()&0xFFFFFFFF)) // Seq
-	binary.BigEndian.PutUint32(tcpHeader[8:12], 0)                                        // Ack
-	tcpHeader[12] = 0xA0                                                                  // Data offset (10 * 4 = 40 bytes)
-	tcpHeader[13] = TCPFlagSYN                                                            // SYN flag
-	binary.BigEndian.PutUint16(tcpHeader[14:16], 65535)                                   // Window size
+	binary.BigEndian.PutUint32(tcpHeader[8:12], 0)                                       // Ack
+	tcpHeader[12] = 0xA0                                                                 // Data offset (10 * 4 = 40 bytes)
+	tcpHeader[13] = TCPFlagSYN                                                           // SYN flag
+	binary.BigEndian.PutUint16(tcpHeader[14:16], 65535)                                  // Window size
 
 	// TCP Options (20 bytes)
 	// MSS (4 bytes)

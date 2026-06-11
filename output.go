@@ -17,9 +17,58 @@ func writeOutput(results interface{}, filename, format string) error {
 		return writeXML(results, filename)
 	case "txt":
 		return writeTXT(results, filename)
+	case "grep", "greppable", "gnmap":
+		return writeGrepable(results, filename)
 	default:
-		return fmt.Errorf("unsupported output format: %s (supported: json, xml, txt)", format)
+		return fmt.Errorf("unsupported output format: %s (supported: json, xml, txt, grep)", format)
 	}
+}
+
+// writeGrepable writes results in an nmap-style greppable format: one line per
+// host that is easy to filter with grep/awk/cut.
+func writeGrepable(results interface{}, filename string) error {
+	prepareForOutput(results)
+
+	var b strings.Builder
+	switch v := results.(type) {
+	case *ScanResults:
+		grepHost(&b, v)
+	case *NetworkScanResults:
+		for _, h := range v.HostResults {
+			grepHost(&b, h)
+		}
+	default:
+		return fmt.Errorf("greppable output not supported for this result type")
+	}
+
+	if err := os.WriteFile(filename, []byte(b.String()), 0644); err != nil {
+		return fmt.Errorf("failed to write greppable file: %v", err)
+	}
+	return nil
+}
+
+// grepHost appends greppable lines for a single host: a Status line plus, if any
+// ports are open, a Ports line of "port/state/service//version/" entries.
+func grepHost(b *strings.Builder, r *ScanResults) {
+	name := r.Hostname
+	status := "Down"
+	if r.HostUp {
+		status = "Up"
+	}
+	fmt.Fprintf(b, "Host: %s (%s)\tStatus: %s\n", r.Target, name, status)
+
+	if len(r.OpenPorts) == 0 {
+		return
+	}
+	entries := make([]string, 0, len(r.OpenPorts))
+	for _, p := range r.OpenPorts {
+		entries = append(entries, fmt.Sprintf("%d/%s/%s//%s/", p.Port, p.State, p.Service, p.Version))
+	}
+	line := fmt.Sprintf("Host: %s (%s)\tPorts: %s", r.Target, name, strings.Join(entries, ", "))
+	if r.OS != "" {
+		line += "\tOS: " + r.OS
+	}
+	fmt.Fprintln(b, line)
 }
 
 // writeJSON writes results as formatted JSON
@@ -135,6 +184,9 @@ func writeSingleHostTXT(file *os.File, results *ScanResults) {
 				version = "-"
 			}
 			fmt.Fprintf(file, "%-8d %-12s %-15s %s\n", port.Port, port.State, port.Service, version)
+			if port.TLSInfo != "" {
+				fmt.Fprintf(file, "%-8s %-12s %-15s TLS: %s\n", "", "", "", port.TLSInfo)
+			}
 		}
 	}
 

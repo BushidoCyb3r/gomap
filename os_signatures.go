@@ -259,40 +259,60 @@ func MatchFingerprint(fp *OSFingerprint) []OSMatch {
 
 	matches := make([]OSMatch, 0)
 
+	// An empty fingerprint (e.g. from a plain TCP connect, where we cannot read
+	// the TTL/window/options off the wire) carries no signal — never guess from it.
+	if fp.TTL == 0 && fp.WindowSize == 0 && fp.TCPOptionsStr == "" {
+		return matches
+	}
+
 	for _, sig := range KnownOSSignatures {
 		score := 0.0
 		maxScore := 0.0
+		// features counts the number of *independent* signal categories that
+		// actually corroborate this signature. TTL, window size, and TCP option
+		// order are independent; the DF bit is a single bit shared by most modern
+		// stacks, so it is deliberately excluded from this count.
+		features := 0
 
-		// TTL matching (weight: 30%)
-		maxScore += 30
-		if fp.TTL >= sig.TTLMin && fp.TTL <= sig.TTLMax {
-			score += 30
-		} else if fp.TTL >= sig.TTLMin-2 && fp.TTL <= sig.TTLMax+2 {
-			// Close match (within 2 hops)
-			score += 15
+		// TTL matching (weight: 30%). Only scored when we actually observed a TTL.
+		if fp.TTL > 0 {
+			maxScore += 30
+			if fp.TTL >= sig.TTLMin && fp.TTL <= sig.TTLMax {
+				score += 30
+				features++
+			} else if fp.TTL >= sig.TTLMin-2 && fp.TTL <= sig.TTLMax+2 {
+				// Close match (within 2 hops)
+				score += 15
+				features++
+			}
 		}
 
-		// Window size matching (weight: 25%)
-		maxScore += 25
-		for _, ws := range sig.WindowSizes {
-			if fp.WindowSize == ws {
-				score += 25
-				break
-			} else if fp.WindowSize > 0 && ws > 0 {
-				// Partial match if within 10%
-				diff := float64(fp.WindowSize-ws) / float64(ws)
-				if diff >= -0.1 && diff <= 0.1 {
-					score += 10
+		// Window size matching (weight: 25%).
+		if fp.WindowSize > 0 && len(sig.WindowSizes) > 0 {
+			maxScore += 25
+			for _, ws := range sig.WindowSizes {
+				if fp.WindowSize == ws {
+					score += 25
+					features++
 					break
+				} else if ws > 0 {
+					// Partial match if within 10%
+					diff := float64(fp.WindowSize-ws) / float64(ws)
+					if diff >= -0.1 && diff <= 0.1 {
+						score += 10
+						features++
+						break
+					}
 				}
 			}
 		}
 
-		// TCP options order matching (weight: 30%)
-		maxScore += 30
+		// TCP options order matching (weight: 30%).
 		if sig.TCPOptions != "" && fp.TCPOptionsStr != "" {
+			maxScore += 30
 			if fp.TCPOptionsStr == sig.TCPOptions {
 				score += 30
+				features++
 			} else if strings.Contains(fp.TCPOptionsStr, "MSS") && strings.Contains(sig.TCPOptions, "MSS") {
 				// Partial match - check how many options match in order
 				fpOpts := strings.Split(fp.TCPOptionsStr, ",")
@@ -303,11 +323,15 @@ func MatchFingerprint(fp *OSFingerprint) []OSMatch {
 						matchCount++
 					}
 				}
-				score += float64(matchCount) * 30 / float64(len(sigOpts))
+				if matchCount > 0 {
+					score += float64(matchCount) * 30 / float64(len(sigOpts))
+					features++
+				}
 			}
 		}
 
-		// DF bit matching (weight: 15%)
+		// DF bit matching (weight: 15%). Corroborating only — never counted as
+		// an independent feature (see above).
 		if sig.DFBit != nil {
 			maxScore += 15
 			if *sig.DFBit == fp.DFBit {
@@ -315,11 +339,15 @@ func MatchFingerprint(fp *OSFingerprint) []OSMatch {
 			}
 		}
 
-		// Calculate confidence
+		if maxScore == 0 {
+			continue
+		}
 		confidence := score / maxScore
 
-		// Only include if confidence > 50%
-		if confidence > 0.5 {
+		// Require corroboration from at least two independent signal categories
+		// AND a solid overall score. A single matching feature (e.g. a TTL of 64,
+		// which Linux, macOS and BSD all share) is not enough to claim a match.
+		if features >= 2 && confidence >= 0.6 {
 			matches = append(matches, OSMatch{
 				Name:       sig.Name,
 				Family:     sig.Family,

@@ -28,8 +28,20 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 		fmt.Printf(ColorCyan+"[*] "+ColorReset+"Resolved "+ColorPurple+"%s"+ColorReset+" to "+ColorTeal+"%s\n"+ColorReset, s.config.Target, targetIP)
 	}
 
-	// Check if host is up
-	results.HostUp = s.pingHost(targetIP)
+	// Reverse DNS (PTR) for host context. Best-effort; ignored on failure.
+	results.Hostname = reverseDNS(targetIP)
+	if results.Hostname != "" && s.config.Verbose {
+		fmt.Printf(ColorCyan+"[*] "+ColorReset+"Reverse DNS: "+ColorTeal+"%s\n"+ColorReset, results.Hostname)
+	}
+
+	// Check if host is up. -Pn skips discovery entirely and assumes the host is
+	// up, which is the right call when a host is firewalled against ping probes
+	// but still has reachable services.
+	if s.config.ForceUp {
+		results.HostUp = true
+	} else {
+		results.HostUp = s.pingHost(targetIP)
+	}
 	if !results.HostUp {
 		if s.config.SkipDown {
 			if s.config.Verbose {
@@ -63,19 +75,34 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 
 	// Scan ports based on scan type
 	var openPorts []PortResult
+	var stats scanStats
 	switch s.config.ScanType {
 	case "tcp":
-		openPorts = s.tcpScan(targetIP, ports)
+		openPorts, stats = s.tcpScan(targetIP, ports)
 	case "syn":
 		fmt.Println("SYN scan requires root privileges, falling back to TCP connect scan")
-		openPorts = s.tcpScan(targetIP, ports)
+		openPorts, stats = s.tcpScan(targetIP, ports)
 	case "udp":
-		openPorts = s.udpScan(targetIP, ports)
+		openPorts, stats = s.udpScan(targetIP, ports)
 	default:
 		return nil, fmt.Errorf("unknown scan type: %s", s.config.ScanType)
 	}
 
 	results.OpenPorts = openPorts
+
+	if s.config.Verbose {
+		fmt.Printf("\n"+ColorCyan+"[*] "+ColorReset+"Port states: "+ColorGreen+"%d open"+ColorReset+", %d closed, %d filtered\n",
+			stats.open, stats.closed, stats.filtered)
+	}
+
+	// If the scan was cancelled (e.g. Ctrl-C), return the partial results we have
+	// rather than spending more time on service/OS/vuln/script enrichment.
+	if s.cancelled() {
+		fmt.Println("\n" + ColorYellow + "[!] Scan cancelled - returning partial results" + ColorReset)
+		results.EndTime = time.Now()
+		results.Duration = results.EndTime.Sub(results.StartTime)
+		return results, nil
+	}
 
 	// Service detection if enabled
 	if s.config.ServiceDetect && len(openPorts) > 0 {
@@ -92,7 +119,7 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 	if s.config.OSDetect {
 		results.OSDetection = s.performOSDetection(targetIP, results.OpenPorts)
 		if results.OSDetection != nil && results.OSDetection.BestMatch != nil {
-			results.OS = results.OSDetection.BestMatch.String()
+			results.OS = results.OSDetection.OSSummary()
 		} else {
 			results.OS = s.detectOS(targetIP, results.OpenPorts)
 		}
@@ -101,7 +128,7 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 	// Run scripts if enabled
 	if s.config.ScriptScan && len(openPorts) > 0 {
 		engine := NewScriptEngine(true, s.config.ScriptCategory, s.config.Verbose)
-		
+
 		for _, port := range openPorts {
 			target := ScriptTarget{
 				Host:    targetIP,
@@ -110,7 +137,7 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 				Version: port.Version,
 				Banner:  "", // Could be populated from service detection
 			}
-			
+
 			scriptResults := engine.RunScripts(target)
 			results.ScriptResults = append(results.ScriptResults, scriptResults...)
 		}
@@ -122,15 +149,28 @@ func (s *Scanner) Scan() (*ScanResults, error) {
 	return results, nil
 }
 
-// tcpScan performs a TCP connect scan
-func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
+// scanStats tallies port states observed during a scan.
+type scanStats struct {
+	open     int
+	closed   int
+	filtered int
+}
+
+// tcpScan performs a TCP connect scan with retransmission and open/closed/
+// filtered classification. A connection refused (RST) is a definitive "closed";
+// a timeout is retried up to config.Retries times before being called "filtered".
+func (s *Scanner) tcpScan(target string, ports []int) ([]PortResult, scanStats) {
 	var results []PortResult
+	var stats scanStats
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	// Create a semaphore to limit concurrent connections
 	// For high ports, reduce concurrency to avoid ephemeral port exhaustion
 	maxThreads := s.config.Threads
+	if maxThreads < 1 {
+		maxThreads = 1
+	}
 	if len(ports) > 0 && ports[len(ports)-1] > 32768 {
 		// Scanning high ephemeral ports - use fewer threads
 		if maxThreads > 50 {
@@ -143,48 +183,66 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 	progressBar := NewProgressBarWithLabel(len(ports), "ports")
 	scannedCount := 0
 
+	attempts := s.config.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
 	for _, port := range ports {
+		if s.cancelled() {
+			break
+		}
 		wg.Add(1)
 		go func(p int) {
 			defer wg.Done()
 			sem <- struct{}{}        // Acquire
 			defer func() { <-sem }() // Release
 
-			address := fmt.Sprintf("%s:%d", target, p)
+			if s.cancelled() {
+				return
+			}
 
-			// Use custom dialer to disable keepalive and close faster
+			address := fmt.Sprintf("%s:%d", target, p)
 			dialer := &net.Dialer{
 				Timeout:   s.config.Timeout,
 				KeepAlive: -1, // Disable keepalive
 			}
 
-			conn, err := dialer.Dial("tcp", address)
-
-			if err == nil {
-				// Immediately close the connection and set linger to 0
-				// This releases the local port faster
-				if tcpConn, ok := conn.(*net.TCPConn); ok {
-					tcpConn.SetLinger(0) // RST instead of FIN for faster close
+			state := "filtered"
+			for attempt := 0; attempt < attempts; attempt++ {
+				if s.limiter.Wait(s.ctx) != nil {
+					return // scan cancelled while pacing
 				}
-				conn.Close()
-
-				service := getServiceName(p)
-
-				mu.Lock()
-				results = append(results, PortResult{
-					Port:    p,
-					State:   "open",
-					Service: service,
-				})
-				mu.Unlock()
-
-				if s.config.Verbose {
-					fmt.Printf("\n"+ColorGreen+"[+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+" is "+ColorGreen+"open"+ColorReset+" (%s)", p, service)
+				conn, err := dialer.Dial("tcp", address)
+				if err == nil {
+					// Close fast (RST instead of FIN) to release the local port.
+					if tcpConn, ok := conn.(*net.TCPConn); ok {
+						tcpConn.SetLinger(0)
+					}
+					conn.Close()
+					state = "open"
+					break
+				}
+				state = classifyDialError(err)
+				if state == "closed" {
+					break // definitive RST - no point retrying
 				}
 			}
 
-			// Update progress
 			mu.Lock()
+			switch state {
+			case "open":
+				service := getServiceName(p)
+				results = append(results, PortResult{Port: p, State: "open", Service: service})
+				stats.open++
+				if s.config.Verbose {
+					fmt.Printf("\n"+ColorGreen+"[+] "+ColorReset+"Port "+ColorPurple+"%d"+ColorReset+" is "+ColorGreen+"open"+ColorReset+" (%s)", p, service)
+				}
+			case "closed":
+				stats.closed++
+			default:
+				stats.filtered++
+			}
 			scannedCount++
 			progressBar.Update(scannedCount)
 			mu.Unlock()
@@ -193,61 +251,97 @@ func (s *Scanner) tcpScan(target string, ports []int) []PortResult {
 
 	wg.Wait()
 	progressBar.Finish(false)
-	return results
+	return results, stats
 }
 
-// udpScan performs a UDP scan
-func (s *Scanner) udpScan(target string, ports []int) []PortResult {
+// udpScan performs a UDP scan. It sends a protocol-specific payload where one
+// is known (DNS, NTP, SNMP, NetBIOS, ...) and interprets the result: a reply
+// means "open"; an ICMP port-unreachable surfaces as a connection-refused read
+// error and means "closed"; silence (after retries) means "open|filtered".
+func (s *Scanner) udpScan(target string, ports []int) ([]PortResult, scanStats) {
 	var results []PortResult
+	var stats scanStats
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	sem := make(chan struct{}, s.config.Threads)
+	maxThreads := s.config.Threads
+	if maxThreads < 1 {
+		maxThreads = 1
+	}
+	sem := make(chan struct{}, maxThreads)
 
-	// Create progress bar for UDP port scanning
 	progressBar := NewProgressBarWithLabel(len(ports), "ports")
 	scannedCount := 0
 
+	attempts := s.config.Retries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+
 	for _, port := range ports {
+		if s.cancelled() {
+			break
+		}
 		wg.Add(1)
 		go func(p int) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			address := fmt.Sprintf("%s:%d", target, p)
-			conn, err := net.DialTimeout("udp", address, s.config.Timeout)
-
-			if err == nil {
-				// Send a probe packet
-				conn.Write([]byte("probe"))
-
-				// Set read deadline
-				conn.SetReadDeadline(time.Now().Add(s.config.Timeout))
-
-				buffer := make([]byte, 1024)
-				_, err := conn.Read(buffer)
-				conn.Close()
-
-				// If we get a response or timeout (not connection refused), port might be open
-				if err == nil {
-					service := getServiceName(p)
-					mu.Lock()
-					results = append(results, PortResult{
-						Port:    p,
-						State:   "open|filtered",
-						Service: service,
-					})
-					mu.Unlock()
-
-					if s.config.Verbose {
-						fmt.Printf("\n"+ColorYellow+"[+] "+ColorReset+"UDP Port "+ColorPurple+"%d"+ColorReset+" is "+ColorYellow+"open|filtered"+ColorReset+" (%s)", p, service)
-					}
-				}
+			if s.cancelled() {
+				return
 			}
 
-			// Update progress
+			address := fmt.Sprintf("%s:%d", target, p)
+			payload := udpProbeFor(p)
+
+			state := "open|filtered"
+			for attempt := 0; attempt < attempts; attempt++ {
+				if s.limiter.Wait(s.ctx) != nil {
+					return
+				}
+				conn, err := net.DialTimeout("udp", address, s.config.Timeout)
+				if err != nil {
+					continue
+				}
+				conn.Write(payload)
+				conn.SetReadDeadline(time.Now().Add(s.config.Timeout))
+				buf := make([]byte, 1024)
+				n, rerr := conn.Read(buf)
+				conn.Close()
+
+				if rerr == nil && n > 0 {
+					state = "open"
+					break
+				}
+				// A connected UDP socket reports a closed port as ECONNREFUSED
+				// (the kernel received an ICMP port-unreachable).
+				if rerr != nil && classifyDialError(rerr) == "closed" {
+					state = "closed"
+					break
+				}
+				// otherwise timeout -> open|filtered, retry
+			}
+
 			mu.Lock()
+			switch state {
+			case "closed":
+				stats.closed++
+			case "open":
+				service := getServiceName(p)
+				results = append(results, PortResult{Port: p, State: "open", Service: service})
+				stats.open++
+				if s.config.Verbose {
+					fmt.Printf("\n"+ColorGreen+"[+] "+ColorReset+"UDP Port "+ColorPurple+"%d"+ColorReset+" is "+ColorGreen+"open"+ColorReset+" (%s)", p, service)
+				}
+			default:
+				service := getServiceName(p)
+				results = append(results, PortResult{Port: p, State: "open|filtered", Service: service})
+				stats.filtered++
+				if s.config.Verbose {
+					fmt.Printf("\n"+ColorYellow+"[+] "+ColorReset+"UDP Port "+ColorPurple+"%d"+ColorReset+" is "+ColorYellow+"open|filtered"+ColorReset+" (%s)", p, service)
+				}
+			}
 			scannedCount++
 			progressBar.Update(scannedCount)
 			mu.Unlock()
@@ -256,7 +350,7 @@ func (s *Scanner) udpScan(target string, ports []int) []PortResult {
 
 	wg.Wait()
 	progressBar.Finish(false)
-	return results
+	return results, stats
 }
 
 // pingHost checks if the host is up using parallel TCP connection attempts
@@ -277,6 +371,30 @@ func (s *Scanner) pingHost(target string) bool {
 	var wg sync.WaitGroup
 	var closeOnce sync.Once
 
+	signalUp := func() {
+		select {
+		case found <- true:
+			closeOnce.Do(func() { close(done) }) // Signal other goroutines to stop
+		default:
+		}
+	}
+
+	// ICMP echo probe (best-effort): catches hosts that are up but firewalled
+	// against TCP. Requires root; a failure here is ignored so TCP discovery
+	// still runs.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		select {
+		case <-done:
+			return
+		default:
+		}
+		if up, err := ICMPEchoPing(target, timeout); err == nil && up {
+			signalUp()
+		}
+	}()
+
 	for _, port := range commonPorts {
 		wg.Add(1)
 		go func(p int) {
@@ -293,11 +411,7 @@ func (s *Scanner) pingHost(target string) bool {
 			conn, err := net.DialTimeout("tcp", address, timeout)
 			if err == nil {
 				conn.Close()
-				select {
-				case found <- true:
-					closeOnce.Do(func() { close(done) }) // Signal other goroutines to stop
-				default:
-				}
+				signalUp()
 			}
 		}(port)
 	}
@@ -327,6 +441,12 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 		return nil, fmt.Errorf("failed to expand CIDR: %v", err)
 	}
 
+	// Drop any explicitly excluded hosts (e.g. the gateway / fragile devices).
+	hosts, excluded := filterExcluded(hosts, s.config.Exclude)
+	if excluded > 0 {
+		fmt.Printf(ColorYellow+"[!] "+ColorReset+"Excluded %d host(s) from %s\n", excluded, cidr)
+	}
+
 	results.TotalHosts = len(hosts)
 
 	fmt.Printf(ColorCyan+"[*] "+ColorReset+"Scanning network "+ColorPurple+"%s"+ColorReset+" (%d hosts)\n\n", cidr, len(hosts))
@@ -348,12 +468,28 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 	scannedCount := 0
 
 	for _, host := range hosts {
+		if s.cancelled() {
+			break
+		}
 		wg.Add(1)
 		go func(targetHost string) {
 			defer wg.Done()
 
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			if s.cancelled() {
+				return
+			}
+
+			// Skip hosts already completed in a previous run (-resume).
+			if s.config.Resume.Done(targetHost) {
+				mu.Lock()
+				scannedCount++
+				progressBar.Update(scannedCount)
+				mu.Unlock()
+				return
+			}
 
 			// Create a new scanner config for this host
 			hostConfig := &ScanConfig{
@@ -362,6 +498,9 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 				Timeout:        s.config.Timeout,
 				PingTimeout:    s.config.PingTimeout,
 				Threads:        s.config.Threads,
+				Retries:        s.config.Retries,
+				MaxRate:        s.config.MaxRate,
+				Timing:         s.config.Timing,
 				ScanType:       s.config.ScanType,
 				OSDetect:       s.config.OSDetect,
 				ServiceDetect:  s.config.ServiceDetect,
@@ -374,6 +513,10 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 			}
 
 			hostScanner := NewScanner(hostConfig)
+			// Share the parent context and rate limiter so cancellation and the
+			// global probe-rate cap apply across the whole subnet scan.
+			hostScanner.ctx = s.ctx
+			hostScanner.limiter = s.limiter
 			hostResults, err := hostScanner.Scan()
 
 			mu.Lock()
@@ -398,6 +541,12 @@ func (s *Scanner) ScanNetwork(cidr string) (*NetworkScanResults, error) {
 				results.HostsDown++
 			}
 			mu.Unlock()
+
+			// Record this host as completed (unless the scan was cancelled mid-host,
+			// in which case it should be retried on resume).
+			if !s.cancelled() {
+				s.config.Resume.Mark(targetHost)
+			}
 		}(host)
 	}
 
